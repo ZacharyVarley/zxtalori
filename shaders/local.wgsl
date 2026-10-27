@@ -246,7 +246,6 @@ const ANGLE_SCALE:f32=16777216.0;
 var<workgroup> lp:array<vec4<f32>,LOCAL>;    // local points (f32), for neighbour filters and gradients
 var<workgroup> l_si:array<u32,LOCAL>;      // source | (2 * operator + negative) << 25
 var<workgroup> l_slot:array<u32,LOCAL>;      // free slot of the point's source, or NO_SLOT
-var<workgroup> l_n:atomic<u32>;
 var<workgroup> seen:array<atomic<u32>,HASH>; // gathered site ids
 var<workgroup> canon:array<u32,FREE>;        // local id of each free source's own site
 var<workgroup> rot:array<vec4<f32>,FREE>;    // accumulated left rotation per free source
@@ -256,24 +255,25 @@ var<workgroup> moved:array<f32,FREE>;        // accumulated displacement bound
 var<workgroup> mult:array<f32,FREE>;         // local trust multiplier
 var<workgroup> star_ids:array<u32,NEAR>;
 var<workgroup> star_y:array<vec4<f32>,NEAR>; // neighbours in the centre's stereographic chart
-var<workgroup> star_n:atomic<u32>;
 var<workgroup> frame:array<vec2<f32>,4>;     // centre quaternion, double-single
 var<workgroup> keys_cur:array<u32,CAPS>;
 var<workgroup> rad_cur:array<f32,CAPS>;
 var<workgroup> keys_new:array<u32,CAPS>;
 var<workgroup> rad_new:array<f32,CAPS>;
-var<workgroup> caps_n:atomic<u32>;
 var<workgroup> angle_sum:array<atomic<i32>,FREE>;
-var<workgroup> fail:atomic<u32>;
-var<workgroup> verdict:u32;
-var<workgroup> count_cur:u32;
-var<workgroup> result_max:f32;
-var<workgroup> free_n:u32;
-// Why a tessellation failed: 2 local points, 4 star neighbours, 8 caps
-// (or separation pairs) overflowed; 16 another job's free source nearby; 32 beyond
-// the shell; 64 no own
-// site; 128 a star did not close.
-var<workgroup> reason:u32;
+// Each job's scalar state, packed: Metal passes every workgroup variable as its own
+// threadgroup argument and allows at most 31 per kernel.
+struct JobTally{l_n:atomic<u32>,star_n:atomic<u32>,caps_n:atomic<u32>,fail:atomic<u32>,pair_n:atomic<u32>}
+struct JobState{
+    verdict:u32,count_cur:u32,result_max:f32,free_n:u32,
+    // Why a tessellation failed: 2 local points, 4 star neighbours, 8 caps (or
+    // separation pairs) overflowed; 16 another job's free source nearby; 32 beyond
+    // the shell; 64 no own site; 128 a star did not close.
+    reason:u32,
+    pair_ok:u32,
+}
+var<workgroup> tally:JobTally;
+var<workgroup> job:JobState;
 
 // Double-single arithmetic as in dt_double.wgsl; the runtime zero blocks reassociation.
 fn rounded(x:f32)->f32{return bitcast<f32>(bitcast<u32>(x)^L.zero);}
@@ -332,24 +332,24 @@ fn sort4(a:u32,b:u32,c:u32,e:u32)->u32{
 }
 // Stars of every free source at the current (trial=false) or trial positions,
 // keeping caps no larger than `limit`. Leaves the caps in keys/rad_new (or _cur),
-// their count in caps_n, the largest radius in result_max, and verdict = 1 when
+// their count in tally.caps_n, the largest radius in job.result_max, and job.verdict = 1 when
 // every star is complete and nothing overflowed.
 fn tessellate(i:u32,trial:bool,limit:f32){
     if(i<FREE){atomicStore(&angle_sum[i],0);}
-    if(i==0u){atomicStore(&caps_n,0u);}
+    if(i==0u){atomicStore(&tally.caps_n,0u);}
     workgroupBarrier();
-    let nfree=workgroupUniformLoad(&free_n);
-    let points=min(atomicLoad(&l_n),LOCAL);let reach=2.0*sin(min(limit,0.78));let reach2=reach*reach*(1.0+1e-3);
+    let nfree=workgroupUniformLoad(&job.free_n);
+    let points=min(atomicLoad(&tally.l_n),LOCAL);let reach=2.0*sin(min(limit,0.78));let reach2=reach*reach*(1.0+1e-3);
     for(var k=0u;k<nfree;k++){
         let centre=canon[k];
-        if(i==0u){atomicStore(&star_n,0u);let f=ds_quaternion(site_coordinate(core_of(centre,trial),(l_si[centre]>>25u)));frame=f;}
+        if(i==0u){atomicStore(&tally.star_n,0u);let f=ds_quaternion(site_coordinate(core_of(centre,trial),(l_si[centre]>>25u)));frame=f;}
         workgroupBarrier();
         let pc=position(centre,trial);
         for(var t=i;t<points;t+=256u){if(t==centre){continue;}let x=position(t,trial)-pc;
-            if(dot(x,x)<=reach2){let slot=atomicAdd(&star_n,1u);
-                if(slot<NEAR){star_ids[slot]=t;star_y[slot]=vec4<f32>(chart(ds_quaternion(site_coordinate(core_of(t,trial),(l_si[t]>>25u)))),0.0);}else{atomicOr(&fail,4u);}}}
+            if(dot(x,x)<=reach2){let slot=atomicAdd(&tally.star_n,1u);
+                if(slot<NEAR){star_ids[slot]=t;star_y[slot]=vec4<f32>(chart(ds_quaternion(site_coordinate(core_of(t,trial),(l_si[t]>>25u)))),0.0);}else{atomicOr(&tally.fail,4u);}}}
         workgroupBarrier();
-        let m=min(atomicLoad(&star_n),NEAR);
+        let m=min(atomicLoad(&tally.star_n),NEAR);
         for(var t=i;t<NEAR*NEAR;t+=256u){let a=t/NEAR;let b=t%NEAR;
             if(a<b&&b<m){let ya=star_y[a].xyz;let yb=star_y[b].xyz;
                 for(var c=b+1u;c<m;c++){let yc=star_y[c].xyz;
@@ -362,21 +362,21 @@ fn tessellate(i:u32,trial:bool,limit:f32){
                     for(var e=0u;e<m;e++){if(e==a||e==b||e==c){continue;}let d=star_y[e].xyz-centre3;if(dot(d,d)<r2*(1.0-1e-6)){empty=false;break;}}
                     if(!empty){continue;}
                     atomicAdd(&angle_sum[k],i32(solid_angle(ya,yb,yc)*ANGLE_SCALE));
-                    let at=atomicAdd(&caps_n,1u);
-                    if(at<CAPS){let key=sort4(centre,star_ids[a],star_ids[b],star_ids[c]);if(trial){keys_new[at]=key;rad_new[at]=rho;}else{keys_cur[at]=key;rad_cur[at]=rho;}}else{atomicOr(&fail,8u);}}}}
+                    let at=atomicAdd(&tally.caps_n,1u);
+                    if(at<CAPS){let key=sort4(centre,star_ids[a],star_ids[b],star_ids[c]);if(trial){keys_new[at]=key;rad_new[at]=rho;}else{keys_cur[at]=key;rad_cur[at]=rho;}}else{atomicOr(&tally.fail,8u);}}}}
         workgroupBarrier();
     }
     // One copy of each cap (a cap with several free vertices is found once per star).
-    let count=min(atomicLoad(&caps_n),CAPS);var mine=-1.0;
+    let count=min(atomicLoad(&tally.caps_n),CAPS);var mine=-1.0;
     if(i<count){let key=select(keys_cur[i],keys_new[i],trial);var first=true;
         for(var s=0u;s<i;s++){if(select(keys_cur[s],keys_new[s],trial)==key){first=false;break;}}
         if(first){mine=select(rad_cur[i],rad_new[i],trial);}}
     workgroupBarrier();
     if(i<count&&mine<0.0){if(trial){rad_new[i]=-1.0;}else{rad_cur[i]=-1.0;}}
     let largest=reduce1(i,mine,true);
-    if(i==0u){var why=atomicLoad(&fail);
+    if(i==0u){var why=atomicLoad(&tally.fail);
         for(var k=0u;k<nfree;k++){if(f32(atomicLoad(&angle_sum[k]))<SPHERE*ANGLE_SCALE*(1.0-1e-3)){why|=128u;}}
-        reason=why;verdict=select(0u,1u,why==0u);result_max=largest;}
+        job.reason=why;job.verdict=select(0u,1u,why==0u);job.result_max=largest;}
     workgroupBarrier();
 }
 // The cap thread i owns at current positions, linearized in the moves of its free sources.
@@ -401,15 +401,13 @@ fn local_cap(i:u32,count:u32)->Cap{
 // their distances under its left move. Stored in seen[], which the gather is done with.
 const PAIRS:u32=256u;
 const SOURCE_MASK:u32=0x1ffffffu;
-var<workgroup> pair_n:atomic<u32>;
-var<workgroup> pair_ok:u32;
 fn find_pairs(i:u32,nfree:u32,points:u32,reach:f32){
-    if(i==0u){atomicStore(&pair_n,0u);}workgroupBarrier();
+    if(i==0u){atomicStore(&tally.pair_n,0u);}workgroupBarrier();
     let chord=2.0*sin(0.5*min(reach,3.0));let limit=chord*chord;
     for(var t=i;t<nfree*LOCAL;t+=256u){let k=t/LOCAL;let v=t%LOCAL;let u=canon[k];
         if(v>=points||v==u||(l_si[v]&SOURCE_MASK)==(l_si[u]&SOURCE_MASK)){continue;}
         let vs=l_slot[v];if(vs!=NO_SLOT&&canon[vs]==v&&vs<k){continue;}
-        let x=lp[u]-lp[v];if(dot(x,x)<limit){let at=atomicAdd(&pair_n,1u);if(at<PAIRS){atomicStore(&seen[at],u|(v<<8u));}else{atomicOr(&fail,8u);}}}
+        let x=lp[u]-lp[v];if(dot(x,x)<limit){let at=atomicAdd(&tally.pair_n,1u);if(at<PAIRS){atomicStore(&seen[at],u|(v<<8u));}else{atomicOr(&tally.fail,8u);}}}
     workgroupBarrier();
 }
 // The pair thread i owns: its S3 angle at current or trial positions and, from
@@ -431,13 +429,13 @@ fn retessellate_jobs(@builtin(workgroup_id) wid:vec3<u32>,@builtin(local_invocat
     let cells=L.grid.x*L.grid.x*L.grid.x;
     if(i<FREE){free_ids[i]=select(NO_SLOT,job_free[j*FREE+i],i<nfree);rot[i]=vec4<f32>(1.0,0.0,0.0,0.0);moved[i]=0.0;mult[i]=1.0;canon[i]=NO_SLOT;
         if(i<nfree){core_now[i]=normalize(qmul(rot[i],q[free_ids[i]]));}}
-    if(i==0u){atomicStore(&l_n,0u);atomicStore(&fail,select(0u,2u,atomicLoad(&job_nfree[j])>FREE));free_n=nfree;}
+    if(i==0u){atomicStore(&tally.l_n,0u);atomicStore(&tally.fail,select(0u,2u,atomicLoad(&job_nfree[j])>FREE));job.free_n=nfree;}
     for(var t=i;t<HASH;t+=256u){atomicStore(&seen[t],NO_SLOT);}
     workgroupBarrier();
     let r0=bitcast<f32>(atomicLoad(&job_old[j]));let limit0=r0*(1.0+1e-3);let budget=0.1*r0;
     let gather=2.0*limit0+2.0*budget+1e-5;let gather_chord=2.0*sin(0.5*min(gather,3.0));
     // The shell holds every orbit point within L.value of the zone; a wider gather would miss some.
-    if(i==0u&&gather>L.value){atomicOr(&fail,32u);}
+    if(i==0u&&gather>L.value){atomicOr(&tally.fail,32u);}
     // Gather orbit points near each free source through the shell grid.
     for(var k=0u;k<nfree;k++){
         let p=normalize(q[free_ids[k]]);let x=p.yzw/(1.0+p.x);
@@ -450,15 +448,15 @@ fn retessellate_jobs(@builtin(workgroup_id) wid:vec3<u32>,@builtin(local_invocat
             var site=shell_index[cell.x+L.grid.x*(cell.y+L.grid.x*cell.z)];
             while(site!=NO_SLOT){let o=shell_point(site,cells);let v=image_of(q[o.x],o.y);let dv=v-p;
                 if(dot(dv,dv)<=gather_chord*gather_chord){
-                    let other=job_of[o.x];if(other!=0u&&other!=j+1u){atomicOr(&fail,16u);}
+                    let other=job_of[o.x];if(other!=0u&&other!=j+1u){atomicOr(&tally.fail,16u);}
                     // The first sight of a site claims its local id (open addressing).
                     var h=pcg(site)&(HASH-1u);
                     for(var probe=0u;probe<2u*HASH;probe++){
                         let r=atomicCompareExchangeWeak(&seen[h],NO_SLOT,site);
-                        if(r.exchanged){let id=atomicAdd(&l_n,1u);
+                        if(r.exchanged){let id=atomicAdd(&tally.l_n,1u);
                             if(id<LOCAL){lp[id]=v;l_si[id]=o.x|(o.y<<25u);var slot=NO_SLOT;
                                 for(var f=0u;f<nfree;f++){if(free_ids[f]==o.x){slot=f;if(o.y==0u){canon[f]=id;}}}
-                                l_slot[id]=slot;}else{atomicOr(&fail,2u);}
+                                l_slot[id]=slot;}else{atomicOr(&tally.fail,2u);}
                             break;}
                         if(r.old_value==site){break;}
                         if(r.old_value!=NO_SLOT){h=(h+1u)&(HASH-1u);}
@@ -468,45 +466,45 @@ fn retessellate_jobs(@builtin(workgroup_id) wid:vec3<u32>,@builtin(local_invocat
     }
     workgroupBarrier();
     workgroupBarrier();
-    if(i==0u){for(var k=0u;k<nfree;k++){if(canon[k]==NO_SLOT){atomicOr(&fail,64u);}}}
+    if(i==0u){for(var k=0u;k<nfree;k++){if(canon[k]==NO_SLOT){atomicOr(&tally.fail,64u);}}}
     workgroupBarrier();
     // Separation pairs a move within this step's budget could bring below the floor.
     let floor_on=L.floor>0.0;
-    if(floor_on){find_pairs(i,nfree,min(atomicLoad(&l_n),LOCAL),L.floor+2.0*budget+1e-4);}
-    let npairs=select(0u,min(atomicLoad(&pair_n),PAIRS),floor_on);
+    if(floor_on){find_pairs(i,nfree,min(atomicLoad(&tally.l_n),LOCAL),L.floor+2.0*budget+1e-4);}
+    let npairs=select(0u,min(atomicLoad(&tally.pair_n),PAIRS),floor_on);
     // Stars at the start; the job proceeds only if they are complete.
     tessellate(i,false,limit0);
-    var current=workgroupUniformLoad(&result_max);let start_ok=workgroupUniformLoad(&verdict);let start_reason=workgroupUniformLoad(&reason);
-    if(i==0u){count_cur=min(atomicLoad(&caps_n),CAPS);}
+    var current=workgroupUniformLoad(&job.result_max);let start_ok=workgroupUniformLoad(&job.verdict);let start_reason=workgroupUniformLoad(&job.reason);
+    if(i==0u){job.count_cur=min(atomicLoad(&tally.caps_n),CAPS);}
     var accepted=0u;let start=current;
     if(start_ok==1u){
         for(var round=0u;round<L.grid.z;round++){
-            let count=workgroupUniformLoad(&count_cur);
+            let count=workgroupUniformLoad(&job.count_cur);
             if(i<FREE){bound[i]=select(0.0,max(0.0,min(trust[free_ids[i]]*L.top*mult[i],budget-moved[i])),i<nfree);}
             workgroupBarrier();
             let cap=local_cap(i,count);let live=cap.slot.x!=NO_SLOT||cap.slot.y!=NO_SLOT||cap.slot.z!=NO_SLOT||cap.slot.w!=NO_SLOT;
             let rho=select(-1e30,rad_cur[min(i,CAPS-1u)],i<count&&rad_cur[min(i,CAPS-1u)]>=0.0);
             var theta=1e30;let pair=pair_row(i,npairs,false,&theta);let paired=i<npairs;
             solve_minimax(i,cap,rho,live,count,pair,theta,paired,npairs);
-            let points=min(atomicLoad(&l_n),LOCAL);
+            let points=min(atomicLoad(&tally.l_n),LOCAL);
             if(i<nfree){core_trial[i]=normalize(qmul(trial_rotation(i),q[free_ids[i]]));}
-            if(i==0u){atomicStore(&fail,0u);}
+            if(i==0u){atomicStore(&tally.fail,0u);}
             workgroupBarrier();
             tessellate(i,true,current);
-            let trial_max=workgroupUniformLoad(&result_max);let complete=workgroupUniformLoad(&verdict);
+            let trial_max=workgroupUniformLoad(&job.result_max);let complete=workgroupUniformLoad(&job.verdict);
             // A move may not bring a pair below the floor, nor a pair already below it nearer.
             var trial_theta=1e30;let unused=pair_row(i,npairs,true,&trial_theta);
             let nearest=-reduce1(i,select(-1e30,-theta,paired),true);let trial_nearest=-reduce1(i,select(-1e30,-trial_theta,paired),true);
-            if(i==0u){pair_ok=select(0u,1u,trial_nearest>=min(L.floor,nearest)*(1.0-1e-6));}
+            if(i==0u){job.pair_ok=select(0u,1u,trial_nearest>=min(L.floor,nearest)*(1.0-1e-6));}
             workgroupBarrier();
-            let separated=workgroupUniformLoad(&pair_ok);
+            let separated=workgroupUniformLoad(&job.pair_ok);
             let keep=complete==1u&&separated==1u&&trial_max<current*(1.0-2e-7);
             if(keep){
                 for(var t=i;t<points;t+=256u){lp[t]=position(t,true);}
                 if(i<CAPS){keys_cur[i]=keys_new[i];rad_cur[i]=rad_new[i];}
                 workgroupBarrier();
                 if(i<nfree){let s=vec3<f32>(best[3u*i],best[3u*i+1u],best[3u*i+2u]);rot[i]=trial_rotation(i);core_now[i]=core_trial[i];moved[i]+=length(s);mult[i]=min(mult[i]*L.grow,4.0);}
-                if(i==0u){count_cur=min(atomicLoad(&caps_n),CAPS);}
+                if(i==0u){job.count_cur=min(atomicLoad(&tally.caps_n),CAPS);}
                 current=trial_max;accepted++;
             }else{if(i<nfree){mult[i]*=L.shrink;}}
             workgroupBarrier();
@@ -529,7 +527,7 @@ fn apply_rotations(@builtin(global_invocation_id) id:vec3<u32>){
 @compute @workgroup_size(1)
 fn job_launch(){let jobs=job_count();launch[0]=jobs;launch[1]=1u;launch[2]=1u;launch[3]=(jobs+255u)/256u;launch[4]=1u;launch[5]=1u;}
 // counters: [1] jobs that improved, [2] jobs skipped, [3] accepted local rounds,
-// [8 + b] skipped jobs with reason bit b.
+// [8 + b] skipped jobs with job.reason bit b.
 @compute @workgroup_size(256)
 fn tally_local(@builtin(global_invocation_id) id:vec3<u32>){
     let j=id.x;if(j>=job_count()){return;}let r=delta[L.n+j];
