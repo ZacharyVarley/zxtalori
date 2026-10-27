@@ -1,0 +1,22 @@
+[project]
+name = "zxtalori"
+dynamic = ["version"]
+description = "Orientation grids and Quey relaxation on SO(3)/K, one Zig + WGSL engine for Python and the browser"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE", "licenses/MIT-Gao.txt", "THIRD_PARTY_NOTICES.md", "scripts/licenses/wgpu-native-LICENSE.MIT"]
+authors = [{ name = "Zachary T. Varley" }]
+dependencies = ["numpy"]
+
+[project.scripts]
+zxtalori = "zxtalori.app:main"
+
+[build-system]
+requires = ["tomli; python_version < '3.11'"]
+build-backend = "build_backend"
+backend-path = ["scripts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["python"]

@@ -1,0 +1,24 @@
+{
+  "generator": "MTEX equispacedSO3Grid port",
+  "skip_dihedral_equator": true,
+  "precision": "float64",
+  "source": "SO3K_Transports/so3kt/baselines/mtex/equispaced.py",
+  "counts": {
+    "C2_257": 276,
+    "C2_1024": 981,
+    "C3_257": 204,
+    "C3_1024": 945,
+    "C4_257": 268,
+    "C4_1024": 978,
+    "C6_257": 261,
+    "C6_1024": 904,
+    "D2_257": 189,
+    "D2_1024": 1104,
+    "D3_257": 246,
+    "D3_1024": 900,
+    "D4_257": 230,
+    "D4_1024": 938,
+    "D6_257": 284,
+    "D6_1024": 1056
+  }
+}

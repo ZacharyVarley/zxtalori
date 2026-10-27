@@ -1,0 +1,54 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>zxtalori · environment check</title>
+<style>
+  body { max-width: 54rem; margin: 4rem auto; padding: 0 1.5rem; color: #d6dfed; background: #101820; font: 16px/1.6 system-ui; }
+  h1 { font-size: 1.5rem; } pre { white-space: pre-wrap; padding: 1.5rem; background: #192631; border-radius: 12px; }
+</style>
+<h1>zxtalori environment check</h1>
+<p>Development diagnostic. The orientation app has not been implemented yet.</p>
+<pre id="result" role="status">Checking WebGPU, WebAssembly, and JavaScript Promise Integration…</pre>
+<script type="module">
+const result = document.querySelector('#result');
+const report = { browser: navigator.userAgent, secureContext: isSecureContext };
+try {
+  report.jspi = typeof WebAssembly.Suspending === 'function' && typeof WebAssembly.promising === 'function';
+  if (!report.jspi) throw new Error('JavaScript Promise Integration unavailable');
+  const response = await fetch('/probe.wasm');
+  if (!response.ok) throw new Error('Missing Zig WebAssembly build');
+  const { instance } = await WebAssembly.instantiate(await response.arrayBuffer());
+  report.wasm = await WebAssembly.promising(instance.exports.setup_probe)(21) === 43;
+  if (!report.wasm) throw new Error('WASM result mismatch');
+  const adapter = await navigator.gpu?.requestAdapter({powerPreference: 'high-performance'});
+  if (!adapter) throw new Error('No WebGPU adapter');
+  report.adapter = {vendor: adapter.info.vendor, architecture: adapter.info.architecture, device: adapter.info.device, description: adapter.info.description};
+  const device = await adapter.requestDevice();
+  device.pushErrorScope('validation');
+  const shaderResponse = await fetch('/probe.wgsl');
+  if (!shaderResponse.ok) throw new Error('Missing shared WGSL probe');
+  const module = device.createShaderModule({code: await shaderResponse.text()});
+  const pipeline = await device.createComputePipelineAsync({layout: 'auto', compute: {module, entryPoint: 'main'}});
+  const output = device.createBuffer({size: 4000, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC});
+  const readback = device.createBuffer({size: 4000, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, device.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: [{binding: 0, resource: {buffer: output}}]}));
+  pass.dispatchWorkgroups(4);
+  pass.end();
+  encoder.copyBufferToBuffer(output, 0, readback, 0, 4000);
+  device.queue.submit([encoder.finish()]);
+  await readback.mapAsync(GPUMapMode.READ);
+  const values = new Float32Array(readback.getMappedRange());
+  report.wgsl = values.length === 1000 && values.every((value, i) => value === 2 * i + 1);
+  readback.unmap();
+  const validationError = await device.popErrorScope();
+  if (validationError) throw new Error(validationError.message);
+  if (!report.wgsl) throw new Error('GPU result mismatch');
+  output.destroy(); readback.destroy(); device.destroy();
+  report.passed = true;
+} catch (error) { report.passed = false; report.error = String(error); }
+result.textContent = JSON.stringify(report, null, 2);
+</script>
+

@@ -1,0 +1,28 @@
+<!doctype html><meta charset="utf-8"><title>Gao shader compiler checks</title>
+<style>body{background:#17212b;color:#e5edf5;font:14px/1.5 monospace;margin:24px}pre{white-space:pre-wrap}</style>
+<pre id="report">Starting shader compiler checks…</pre>
+<script type="module">
+const output=document.querySelector('#report'),report={stage:'Load',cases:[]};
+const show=()=>output.textContent=JSON.stringify(report,null,2);
+try{
+ const adapter=await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
+ const device=await adapter.requestDevice({requiredLimits:{maxStorageBuffersPerShaderStage:adapter.limits.maxStorageBuffersPerShaderStage,maxComputeWorkgroupStorageSize:adapter.limits.maxComputeWorkgroupStorageSize}});
+ const names=['gao_storage','gao_topology','gao_geometry','dt_math','dt_double','dt_integer','gao_predicates','gao_double','gao_post'];
+ const sources=await Promise.all(names.map(n=>fetch(`/qa/shaders/${n}.wgsl`).then(r=>r.text())));
+ const prefix='const GAO_FILTERED_ONLY=false;const GAO_INTEGER_PRIMES=32u;const GAO_POST=true;const GAO_MAX_P=64u;const GAO_MAX_T=128u;const POST_LANES=32u;const NONE=0xffffffffu;struct Cache{ids:vec4<u32>,more:vec4<u32>}\n';
+ const variants=[[64,32,32],[64,32,96],[128,32,96],[256,16,96]].map(([capacity,lanes,primes])=>[
+  `${capacity} vertices, ${lanes} lanes, ${primes} primes`,
+  prefix.replace('GAO_MAX_P=64u',`GAO_MAX_P=${capacity}u`).replace('GAO_MAX_T=128u',`GAO_MAX_T=${capacity*2}u`).replace('POST_LANES=32u',`POST_LANES=${lanes}u`).replace('GAO_INTEGER_PRIMES=32u',`GAO_INTEGER_PRIMES=${primes}u`)+sources.join('\n')
+ ]);
+ variants.unshift(['filtered cooperative pass',variants[0][1].replace('GAO_FILTERED_ONLY=false','GAO_FILTERED_ONLY=true')]);
+ for(const [name,code] of variants){
+  report.stage=name;show();const start=performance.now();
+  try{
+   device.pushErrorScope('validation');const module=device.createShaderModule({code});
+   await device.createComputePipelineAsync({layout:'auto',compute:{module,entryPoint:'gao_post'}});
+   const error=await device.popErrorScope();report.cases.push({name,milliseconds:performance.now()-start,passed:!error,error:error?.message});
+  }catch(error){await device.popErrorScope();report.cases.push({name,milliseconds:performance.now()-start,passed:false,error:String(error)});}show();
+ }
+ device.destroy();report.stage='Complete';show();
+}catch(error){report.error=String(error);show();}
+</script>

@@ -1,0 +1,6 @@
+# Verification and scientific reference tools, not product runtime dependencies.
+numpy
+scipy
+pytest
+wgpu
+

@@ -1,0 +1,39 @@
+<!doctype html><meta charset="utf-8"><title>GPU covering validation</title>
+<style>body{background:#17212b;color:#e5edf5;font:14px/1.6 monospace;margin:24px}pre{white-space:pre-wrap}</style>
+<pre id="report">Starting browser WebGPU validation…</pre>
+<script type="module">
+import {Zxtalori} from '/engine/zxtalori.js';
+const output=document.querySelector('#report'),report={stage:'Create engine',groups:[],large:[],hundred_k:[],passed:false};
+const show=()=>output.textContent=JSON.stringify(report,null,2);
+let engine;
+try{
+  engine=await Zxtalori.create();report.gpu=engine.info;
+  const reference=await(await fetch('/qa/covering-reference.json',{cache:'no-store'})).json();
+  for(const [id,[group,expected]] of Object.entries(reference).entries()){
+    report.stage=`Covering ${group}`;show();
+    const generated=await engine.generate(id,2,100),start=performance.now();
+    const measured=(await engine.covering()).stats;
+    await engine.relax(1);const stale=(await engine.snapshot()).stats;
+    const refreshed=(await engine.covering()).stats;
+    report.groups.push({group,count:generated.quaternions.length/4,radius_deg:measured.covering_radius_deg,oracle_radius_deg:expected.radius_deg,milliseconds:performance.now()-start,
+      passed:generated.quaternions.length===4*expected.count&&Math.abs(measured.covering_radius_deg-expected.radius_deg)<2e-4&&measured.covering_current&&!stale.covering_current&&refreshed.covering_current&&refreshed.covering_iteration===1});show();
+  }
+  report.stage='O h=12, FZ plus shell';show();await engine.generate(9,12);
+  for(let sample=0;sample<3;sample++){
+    const start=performance.now(),stats=(await engine.covering()).stats;
+    report.large.push({sample,count:7637,shell_sites:stats.covering_shell_points,radius_deg:stats.covering_radius_deg,milliseconds:performance.now()-start,
+      passed:Math.abs(stats.covering_radius_deg-4.0472863997)<2e-4&&stats.covering_current&&stats.covering_shell_points<20000});show();
+  }
+  if(new URL(location.href).searchParams.has('100k')){
+    report.stage='O h=29, about 100k FZ representatives';show();
+    const generated=await engine.generate(9,29);
+    for(let sample=0;sample<3;sample++){
+      const start=performance.now(),stats=(await engine.covering()).stats;
+      report.hundred_k.push({sample,count:generated.quaternions.length/4,shell_sites:stats.covering_shell_points,radius_deg:stats.covering_radius_deg,milliseconds:performance.now()-start,
+        passed:generated.quaternions.length===99137*4&&Math.abs(stats.covering_radius_deg-1.6397905669)<2e-4&&stats.covering_current&&stats.covering_shell_points===119519});show();
+    }
+  }
+  report.stage='Complete';report.passed=report.groups.every(x=>x.passed)&&report.large.every(x=>x.passed)&&report.hundred_k.every(x=>x.passed);
+}catch(error){report.error=String(error);report.gpu_error=engine?.state.lastGpuError;report.errors=engine?.state.errors;report.stage='Failed';}
+finally{engine?.destroy();show();}
+</script>

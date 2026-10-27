@@ -1,0 +1,53 @@
+# fetched toolchains and libraries (scripts/fetch_deps.py)
+.deps/
+# build outputs
+.zig-cache/
+zig-out/
+dist/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+# local Python environments
+.venv/
+.venv-wsl/
+# development history, private archives, reference tooling and validation receipts
+research/
+# coding-agent and editor state
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+.mcp.json
+.cursor/
+.cursorrules
+.cursorignore
+.aider*
+.codex/
+AGENTS.md
+AGENTS.override.md
+.github/copilot-instructions.md
+.github/instructions/
+.github/prompts/
+.continue/
+.windsurf/
+.windsurfrules
+.gemini/
+GEMINI.md
+.clinerules
+.cline/
+.roo/
+.roomodes
+.kiro/
+.junie/
+.amazonq/
+.augment/
+.opencode/
+.vscode/
+.idea/
+.zed/
+# operating system and local secrets
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+.env
+.env.*

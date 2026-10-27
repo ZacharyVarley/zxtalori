@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>zxtalori</title>
+<link rel="stylesheet" href="style.css">
+<script>try{const t=localStorage.getItem('zxtalori-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;}catch{}</script>
+</head>
+<body class="connecting">
+
+<svg hidden>
+  <symbol id="i-import" viewBox="0 0 16 16"><path d="M8 10.5v-8M5 5.5l3-3 3 3M2.5 10v2A1.5 1.5 0 0 0 4 13.5h8a1.5 1.5 0 0 0 1.5-1.5v-2"/></symbol>
+  <symbol id="i-export" viewBox="0 0 16 16"><path d="M8 2.5v8M5 7.5l3 3 3-3M2.5 10v2A1.5 1.5 0 0 0 4 13.5h8a1.5 1.5 0 0 0 1.5-1.5v-2"/></symbol>
+  <symbol id="i-theme" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-reset" viewBox="0 0 16 16"><path d="M2.75 8a5.25 5.25 0 1 0 1.55-3.7"/><path d="M2.75 2.5v3h3"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 16 16"><path d="M5.5 3 2.5 6l3 3"/><path d="M2.5 6h6.75a4.25 4.25 0 0 1 0 8.5H6"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 16 16"><path d="M2.5 4.5h6M12.5 4.5h1M2.5 11.5h1M7.5 11.5h6"/><circle cx="10.5" cy="4.5" r="1.75"/><circle cx="5.5" cy="11.5" r="1.75"/></symbol>
+  <symbol id="i-dice" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><circle cx="5.6" cy="5.6" r=".5" fill="currentColor"/><circle cx="8" cy="8" r=".5" fill="currentColor"/><circle cx="10.4" cy="10.4" r=".5" fill="currentColor"/></symbol>
+  <symbol id="i-play" viewBox="0 0 16 16"><path d="M5 3.25v9.5L12.5 8z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 16 16"><path d="M13.25 6.5A5.5 5.5 0 0 0 3.3 5M2.75 9.5a5.5 5.5 0 0 0 9.95 1.5"/><path d="M3 2.25V5h2.75M13 13.75V11h-2.75"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.75v3.75"/><circle cx="8" cy="11" r=".4" fill="currentColor"/></symbol>
+</svg>
+
+
+<main class="workspace">
+
+<aside class="sidebar panel" aria-label="Sample and relaxation">
+
+  <header class="side-head">
+    <a class="brand" href="./">
+      <svg class="brand-mark" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.25"/><ellipse cx="10" cy="10" rx="7.25" ry="2.6" transform="rotate(-28 10 10)"/><circle class="brand-dot" cx="15.6" cy="7.1" r="1.7"/></svg>
+      <span class="brand-text"><span class="brand-name">zxtalori</span><span class="brand-sub">SO(3)/K workbench</span></span>
+    </a>
+    <div class="top-actions">
+      <button id="import-button" class="ghost icon-only" aria-label="Import quaternions from JSON or CSV" title="Import quaternions from JSON or CSV"><svg class="icon"><use href="#i-import"/></svg></button>
+      <button id="export-button" class="ghost icon-only" disabled aria-label="Export the current sample" title="Export the current sample"><svg class="icon"><use href="#i-export"/></svg></button>
+      <button id="theme-button" class="ghost icon-only" aria-label="Switch color theme" title="Switch color theme"><svg class="icon"><use href="#i-theme"/></svg></button>
+    </div>
+  </header>
+
+  <section class="section">
+    <header class="section-head"><h2>Sample</h2></header>
+
+    <fieldset id="group" class="field">
+      <legend class="field-label">Symmetry group</legend>
+      <div class="group-picker">
+        <div class="group-row"><span class="group-family">Cyclic</span><div class="chips">
+          <label class="chip"><input type="radio" name="group" value="C2"><span>C<sub>2</sub></span></label>
+          <label class="chip"><input type="radio" name="group" value="C3"><span>C<sub>3</sub></span></label>
+          <label class="chip"><input type="radio" name="group" value="C4"><span>C<sub>4</sub></span></label>
+          <label class="chip"><input type="radio" name="group" value="C6"><span>C<sub>6</sub></span></label>
+        </div></div>
+        <div class="group-row"><span class="group-family">Dihedral</span><div class="chips">
+          <label class="chip"><input type="radio" name="group" value="D2"><span>D<sub>2</sub></span></label>
+          <label class="chip"><input type="radio" name="group" value="D3"><span>D<sub>3</sub></span></label>
+          <label class="chip"><input type="radio" name="group" value="D4"><span>D<sub>4</sub></span></label>
+          <label class="chip"><input type="radio" name="group" value="D6"><span>D<sub>6</sub></span></label>
+        </div></div>
+        <div class="group-row"><span class="group-family">Polyhedral</span><div class="chips">
+          <label class="chip"><input type="radio" name="group" value="T"><span>T</span></label>
+          <label class="chip"><input type="radio" name="group" value="O" checked><span>O</span></label>
+          <label class="chip"><input type="radio" name="group" value="I"><span>I</span></label>
+        </div></div>
+      </div>
+      <p id="group-order" class="hint">Octahedral · 24 rotations</p>
+    </fieldset>
+
+    <fieldset id="count-mode" class="field">
+      <legend class="field-label">Initialization</legend>
+      <div class="segmented">
+        <label title="Native lattice or MTEX grid"><input type="radio" name="count-mode" value="grid" checked><span>Grid</span></label>
+        <label title="Exact orientation count"><input type="radio" name="count-mode" value="exact"><span>Exact count</span></label>
+        <label title="Seeded Haar random samples"><input type="radio" name="count-mode" value="random"><span>Random</span></label>
+      </div>
+      <p id="count-note" class="hint"></p>
+    </fieldset>
+
+    <div id="h-field" class="field"><label class="field-label" for="semi-edge">Lattice semi-edge <i>h</i></label><input id="semi-edge" type="number" min="1" max="12" value="6"></div>
+    <div id="count-field" class="field" hidden><label class="field-label" for="target-count" id="target-label">Requested count</label><input id="target-count" type="number" min="32" max="1000000" step="1" value="1000"></div>
+    <div id="seed-field" class="field" hidden><label class="field-label" for="random-seed">Seed</label><div class="input-group"><input id="random-seed" type="number" min="0" max="4294967295" value="193"><button id="shuffle-seed" class="icon-only" aria-label="New random seed" title="New random seed"><svg class="icon"><use href="#i-dice"/></svg></button></div></div>
+
+    <button id="generate-button" class="primary block generate" disabled>Generate</button>
+    <p id="construction-note" class="hint centered"></p>
+  </section>
+
+  <section class="section">
+    <header class="section-head"><h2>Relax</h2><span class="meta">step <b id="iteration-count">0</b></span></header>
+
+    <fieldset id="objective" class="field">
+      <legend class="field-label">Objective</legend>
+      <div class="segmented">
+        <label title="Quey geodesic pair repulsion"><input type="radio" name="objective" value="repulsion" checked><span>Repulsion</span></label>
+        <label title="Lower the covering radius with local GPU moves"><input type="radio" name="objective" value="covering"><span>Covering</span></label>
+      </div>
+    </fieldset>
+
+    <fieldset id="forces" class="field">
+      <legend class="field-label">Forces</legend>
+      <div class="segmented">
+        <label title="Near field above 20,000 orientations, all pairs below"><input type="radio" name="forces" value="auto" checked><span>Auto</span></label>
+        <label title="Every orbit point (cost grows with the square of the count)"><input type="radio" name="forces" value="all"><span>All pairs</span></label>
+        <label title="Orbit points within 20 mean orientation radii, about 7,500 per point (Quey et al. 2018); cost grows linearly"><input type="radio" name="forces" value="near"><span>Near field</span></label>
+      </div>
+    </fieldset>
+
+    <fieldset id="free-set" class="field" hidden>
+      <legend class="field-label">Free points per job</legend>
+      <div class="segmented">
+        <label title="The four sources of the offending cap"><input type="radio" name="free-set" value="0"><span>Tet</span></label>
+        <label title="Also the apex of each cap sharing a face with it"><input type="radio" name="free-set" value="1" checked><span>Face</span></label>
+      </div>
+    </fieldset>
+
+    <div id="floor-field" class="field" hidden>
+      <label class="field-label" for="separation-floor">Min separation (°)</label>
+      <div class="input-group"><input id="separation-floor" type="number" min="0" max="179" step="0.01" placeholder="None"><button id="floor-from-current" type="button" title="Set the floor to 95% of the current separation">95% of current</button></div>
+      <p class="hint">Local steps keep every pair of orientations at least this far apart.</p>
+    </div>
+
+    <div class="field">
+      <label class="field-label" for="iterations" id="iterations-label">Iterations</label>
+      <div class="run-row">
+        <input id="iterations" type="number" min="1" max="1000" value="30">
+        <button id="relax-button" class="primary" disabled><svg class="icon"><use href="#i-play"/></svg><span id="relax-label">Relax</span></button>
+        <button id="stop-button" class="danger" disabled><svg class="icon"><use href="#i-stop"/></svg>Stop</button>
+      </div>
+      <div id="run-progress" class="progress" hidden><i id="run-progress-bar"></i></div>
+    </div>
+
+    <div class="switches">
+      <label class="switch"><input id="add-identity" type="checkbox"><span class="track"></span>Include identity</label>
+      <label class="switch"><input id="fix-identity" type="checkbox"><span class="track"></span>Hold identity fixed</label>
+    </div>
+
+    <button id="restore-button" class="ghost block" disabled><svg class="icon"><use href="#i-undo"/></svg>Restore original</button>
+
+    <details class="disclosure"><summary>About the objective</summary>
+      <p class="hint" data-objective="repulsion">Pair repulsion 1/<i>d</i> + 1/(π − <i>d</i>), where <i>d</i> is the geodesic distance on S³. Symmetry images and antipodes are included. Barzilai–Borwein steps with curvature scaling.</p>
+      <p class="hint" data-objective="repulsion">Near field sums only the orbit points within 20 mean orientation radii, fading smoothly over the outer half, so a step costs time linear in the count. Its energy is the near-field sum. Differences in density at larger scales even out more slowly than with all pairs.</p>
+      <p class="hint" data-objective="covering" hidden>Moves disjoint groups of points around the largest empty caps and keeps a move only if the exact local maximum drops. Small kicks leave plateaus, and the best sample found is kept. Separation is not constrained and usually falls.</p>
+    </details>
+  </section>
+
+</aside>
+
+<section class="stage" aria-label="Orientation view">
+
+  <div class="viewport card" id="canvas-wrap">
+    <canvas id="view" tabindex="0" aria-label="3D orientation plot. Drag to orbit, Shift-drag to pan, scroll to zoom, click to inspect."></canvas>
+
+    <div class="view-head">
+      <div class="view-title">
+        <h1 id="sample-heading">O · Octahedral</h1>
+        <div class="view-sub"><span id="sample-badge">No sample</span><span id="selected-badge" class="tag" hidden></span></div>
+      </div>
+      <div class="view-tools">
+        <fieldset id="view-domain" class="segmented glass"><legend class="sr-only">View domain</legend>
+          <label title="Fundamental zone"><input type="radio" name="view-domain" value="fz" checked><span>Zone</span></label>
+          <label title="Full SO(3), streamed symmetry images"><input type="radio" name="view-domain" value="so3"><span>SO(3)</span></label>
+        </fieldset>
+        <fieldset id="projection" class="segmented glass"><legend class="sr-only">Projection</legend>
+          <label><input type="radio" name="projection" value="homochoric" checked><span>Homochoric</span></label>
+          <label><input type="radio" name="projection" value="rodrigues"><span>Rodrigues</span></label>
+          <label><input type="radio" name="projection" value="axisangle"><span>Axis–angle</span></label>
+        </fieldset>
+        <div class="tool-group">
+          <button id="reset-view" class="tool" aria-label="Reset view" title="Reset view (0)"><svg class="icon"><use href="#i-reset"/></svg></button>
+          <button id="display-button" class="tool" popovertarget="display-panel" aria-label="Display settings" title="Display settings"><svg class="icon"><use href="#i-sliders"/></svg></button>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-empty" class="view-empty"><span class="spinner" aria-hidden="true"></span><p id="empty-copy">Connecting to GPU…</p></div>
+
+    <div class="view-foot">
+      <div class="legend">
+        <span class="legend-item" id="color-key"><i class="swatch current" id="color-swatch"></i><span id="color-name">Current</span><span id="color-scale" class="color-scale" hidden><span id="color-low"></span><i id="color-ramp" class="ramp"></i><span id="color-high"></span></span></span>
+        <label class="legend-item toggle" title="Show the generated sample"><input id="show-original" type="checkbox"><i class="swatch original"></i>Original</label>
+        <label class="legend-item toggle" title="Show the fundamental-zone boundary"><input id="show-zone" type="checkbox" checked><i class="swatch boundary"></i>Boundary</label>
+      </div>
+      <div class="view-meta">
+        <span id="display-count"></span>
+        <span class="help" tabindex="0" aria-describedby="view-help">?<span id="view-help" class="help-pop" role="tooltip"><b>Drag</b> orbit<br><b>Shift-drag</b> or <b>right-drag</b> pan<br><b>Scroll</b> zoom<br><b>Click</b> inspect a point<br><b>Arrows</b> orbit · <b>+ −</b> zoom · <b>0</b> reset</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div id="display-panel" class="popover" popover="manual" aria-label="Display settings">
+    <header class="popover-head"><h2>Display</h2><button class="tool plain" popovertarget="display-panel" popovertargetaction="hide" aria-label="Close display settings"><svg class="icon"><use href="#i-x"/></svg></button></header>
+    <div class="popover-body">
+      <div class="field row"><label for="display-limit">Points drawn</label><select id="display-limit"><option value="100000" selected>≤ 100,000</option><option value="10000">≤ 10,000</option><option value="1000">≤ 1,000</option><option value="0">All</option></select></div>
+      <div class="field row"><label for="color-by">Color by</label><select id="color-by">
+        <option value="auto" selected>Objective</option>
+        <option value="zone">Symmetry zone</option>
+        <option value="single">Single color</option>
+        <option value="separation">Nearest neighbour</option>
+        <option value="covering">Largest adjacent cap</option>
+        <option value="faces">Voronoi faces</option>
+      </select></div>
+      <p class="hint" id="color-hint">Repulsion colors by nearest-neighbour distance and covering runs by the largest Delaunay cap at each point; both come with each step's measures. Voronoi faces come from covering checks.</p>
+      <div class="field"><label class="field-label spread" for="point-size">Point radius <output id="point-size-value" for="point-size">2</output></label><input id="point-size" type="range" min="0.5" max="6" value="2" step="0.25"></div>
+      <div class="field"><label class="field-label spread" for="wire-width">Wire width <output id="wire-width-value" for="wire-width">0.85</output></label><input id="wire-width" type="range" min="0.2" max="3" value="0.85" step="0.05"></div>
+      <div class="switches">
+        <label class="switch"><input id="auto-rotate" type="checkbox"><span class="track"></span>Rotate about world Z</label>
+      </div>
+      <div class="field row"><label for="cut-plane">Cut through origin</label><select id="cut-plane"><option value="none">None</option><option value="x">Keep +X</option><option value="y">Keep +Y</option><option value="z">Keep +Z</option><option value="-x">Keep −X</option><option value="-y">Keep −Y</option><option value="-z">Keep −Z</option></select></div>
+      <div id="clip-field" class="field row" hidden><label for="rf-limit">Rodrigues radius ≤</label><input id="rf-limit" type="number" min="1" max="100" value="4" step="1"></div>
+
+      <div class="popover-section">
+        <h3>Delaunay triangulation</h3>
+        <div class="switches">
+          <label class="switch"><input id="show-dt" type="checkbox"><span class="track"></span>Show edges</label>
+          <label class="switch"><input id="show-shell" type="checkbox" checked><span class="track"></span>Show shell images</label>
+        </div>
+        <div class="field row"><label for="dt-budget">Edge budget</label><input id="dt-budget" type="number" min="100" max="100000" value="6000" step="100"></div>
+        <button id="load-dt" class="block" disabled>Compute triangulation</button>
+        <p id="dt-note" class="hint">FZ and shell triangulation. Compute again after points move.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="dock">
+    <header class="pane-head">
+      <div class="pane-tabs" role="tablist" aria-label="Bottom pane">
+        <button id="tab-history" role="tab" aria-selected="true" aria-controls="history-panel">History</button>
+        <button id="tab-log" role="tab" aria-selected="false" aria-controls="log-panel" tabindex="-1">Log<span id="log-badge" class="badge" hidden></span></button>
+      </div>
+      <div id="history-series" class="series" role="group" aria-label="Measures to plot"></div>
+      <span id="log-count" class="meta" hidden></span>
+      <button id="log-clear" class="ghost small" title="Clear the log" hidden>Clear</button>
+    </header>
+    <div id="history-panel" class="pane-body history-wrap" role="tabpanel" aria-labelledby="tab-history"><canvas id="history" aria-label="Measure history"></canvas><div id="history-note" class="readout" aria-live="off"></div><div id="history-empty" class="history-empty">No measurements yet</div></div>
+    <div id="log-panel" class="pane-body" role="tabpanel" aria-labelledby="tab-log" hidden><ol id="log-list" class="log-list" tabindex="0" aria-live="off"></ol></div>
+  </div>
+
+</section>
+
+<aside class="inspector panel" aria-label="Measures and selection">
+
+  <section class="section">
+    <header class="section-head"><h2>Measures</h2><button id="measure-button" class="ghost small" disabled title="Recompute pair energies and separation"><svg class="icon"><use href="#i-refresh"/></svg>Refresh</button></header>
+
+    <dl class="counts">
+      <div><dt>FZ orientations</dt><dd id="point-count">—</dd></div>
+      <div><dt>SO(3) images</dt><dd id="extended-count">—</dd></div>
+    </dl>
+
+    <div class="tiles">
+      <button class="tile" data-metric="separation_deg" title="Minimum separation between orientations"><span>Separation</span><strong id="separation">—</strong></button>
+      <button class="tile" data-metric="covering_radius_deg" title="Largest empty spherical cap, expressed as an SO(3) rotation angle."><span>Covering radius</span><strong id="covering-radius">—</strong></button>
+      <button class="tile" data-metric="mesh_ratio" title="Covering radius divided by minimum separation; SO3K_Transports convention."><span>Mesh ratio</span><strong id="mesh-ratio">—</strong></button>
+      <button class="tile" data-metric="covering_excess" title="Covering radius / simplex bound minus 1; N = 2|K|N_FZ. Dimensionless fraction."><span>Covering excess</span><strong id="covering-excess">—</strong></button>
+    </div>
+
+    <div class="field">
+      <label class="field-label" for="covering-mode">Covering updates</label>
+      <div class="input-group"><select id="covering-mode"><option value="auto">Automatic</option><option value="ten">Every 10 steps</option><option value="end">At end of run</option><option value="manual">Manual</option></select><button id="cover-button" disabled>Check now</button></div>
+      <p id="covering-note" class="hint">Not checked</p>
+    </div>
+  </section>
+
+  <section class="section">
+    <header class="section-head"><h2>Energy</h2></header>
+    <div class="metric-list">
+      <button class="metric" data-metric="energy" title="Mean pair value of 1/d + 1/(π−d), d on S³ in radians; other-source symmetry images."><span>Repulsion energy</span><strong id="energy">—</strong></button>
+      <span class="list-label">Ratios on S³</span>
+      <button class="metric" data-metric="riesz_1"><span>Riesz <i>s</i> = 1</span><strong id="riesz-1">—</strong></button>
+      <button class="metric" data-metric="riesz_2"><span>Riesz <i>s</i> = 2</span><strong id="riesz-2">—</strong></button>
+      <button class="metric" data-metric="riesz_3"><span>Riesz <i>s</i> = 3</span><strong id="riesz-3">—</strong></button>
+      <button class="metric" data-metric="green_ratio"><span>Green</span><strong id="green">—</strong></button>
+      <button class="metric" data-metric="log_ratio"><span>Logarithmic</span><strong id="log">—</strong></button>
+    </div>
+    <p id="precision-note" class="hint"></p>
+  </section>
+
+  <section class="section">
+    <header class="section-head"><h2>Selection</h2><span id="selection-index" class="meta">none</span></header>
+    <p id="selection-hint" class="hint">Click a point in the view to inspect it.</p>
+    <div id="selection-values" hidden>
+      <div class="quat"><span>w</span><strong id="quat-w"></strong><span>x</span><strong id="quat-x"></strong><span>y</span><strong id="quat-y"></strong><span>z</span><strong id="quat-z"></strong></div>
+      <div class="metric static"><span>Rotation angle</span><strong id="rotation-angle"></strong></div>
+    </div>
+  </section>
+
+</aside>
+
+</main>
+
+<footer class="statusbar"><div id="status" role="status" aria-live="polite"><span class="status-dot"></span>Preparing GPU</div><div class="status-right"><div id="status-detail"></div><span id="gpu-badge" class="gpu-chip" data-state="pending"><i class="dot"></i>Connecting to GPU</span></div></footer>
+
+<div id="error-banner" class="toast" role="alert" hidden><svg class="icon"><use href="#i-alert"/></svg><span id="error-message"></span><button id="dismiss-error" class="tool plain" aria-label="Dismiss error"><svg class="icon"><use href="#i-x"/></svg></button></div>
+
+<dialog id="export-dialog" aria-labelledby="export-title">
+  <form method="dialog">
+    <header class="dialog-head"><div><h2 id="export-title">Export sample</h2><p class="hint">Scalar-first quaternions (w, x, y, z).</p></div><button class="tool plain" aria-label="Close"><svg class="icon"><use href="#i-x"/></svg></button></header>
+    <div class="dialog-body">
+      <button id="export-json" type="button" class="option"><span class="format">JSON</span><strong>Sample with provenance</strong><span>Quaternions, generator settings, measures and history. Opens again in the workbench.</span></button>
+      <button id="export-csv" type="button" class="option"><span class="format">CSV</span><strong>Quaternions only</strong><span>One orientation per row with a w, x, y, z header.</span></button>
+    </div>
+  </form>
+</dialog>
+
+<input id="import-file" type="file" accept=".json,.csv,.txt" hidden>
+<script type="module" src="app.js"></script>
+</body>
+</html>
