@@ -17,7 +17,7 @@ def full_orbit_covering(q,operations):
 
 @pytest.mark.parametrize('group',zxtalori.GROUPS)
 def test_gpu_covering_full_orbit_and_stale_state(group):
-    with zxtalori.generate(group,h=2,count=100) as grid:
+    with zxtalori.generate(group,h=2,count=100,kind='transport' if group in ('T','O','I') else None) as grid:
         assert grid.stats['covering_radius_deg'] is None
         for stage in range(2):
             if stage:

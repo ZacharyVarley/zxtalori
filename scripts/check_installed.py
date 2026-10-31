@@ -24,7 +24,7 @@ def receipt(root, name):
 
 def main():
     assert "site-packages" in str(Path(zo.__file__)).lower(), zo.__file__
-    with zo.generate("O", h=6) as transported:
+    with zo.generate("O", h=6, kind="transport") as transported:
         assert len(transported) == 1043
         assert abs(transported.measure()["log_ratio"] - 0.2775034) < 2e-5
         covering=transported.covering()
@@ -34,7 +34,7 @@ def main():
         assert not transported.stats['covering_current']
     with zo.generate("D4", count=1024) as sample:
         initial = sample.measure()
-        assert len(sample) == 938 and initial["separation_deg"] > 0.1
+        assert len(sample) == 978 and initial["separation_deg"] > 0.1
         sample.relax(steps=3)
         after = sample.stats
         assert after["quey_energy"] <= initial["quey_energy"] + 1e-6

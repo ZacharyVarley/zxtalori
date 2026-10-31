@@ -30,8 +30,8 @@ imports any installed copy of the package instead of this checkout.
 ## Tests
 
 `tests/test_generation.py` exercises actual Zig lattice construction, GPU
-transport/ZYZ conversion, seam deduplication and Python transfer against f64
-fixtures. Direct shader tests compare pair/force kernels against dense f64
+transport and Python transfer against f64
+fixtures; `tests/test_hopf.py` does the same for the inverse Hopf product grids. Direct shader tests compare pair/force kernels against dense f64
 NumPy formulas, and native measure tests check public API invariants and Quey
 descent. Full expanded orbits are permitted in small independent test oracles;
 production code must keep them implicit.
@@ -112,8 +112,8 @@ first visit starts compiling every kernel at load.
 
 - Scalar-first quaternions and right action `q*g`; I uses the final research
   frame with five-fold axes along z and (2,0,1).
-- C/D construction follows the MTEX port with its dihedral polar-parity
-  repair. Actual counts are reported rather than truncating a product lattice.
+- Product grids follow `so3k/product.py`. Actual counts are reported rather
+  than truncating a grid.
 - Preserve orbit/antipodal invariance and distinguish S3 from SO3 angles.
 - Keep all vectorizable work in WGSL; Zig schedules and performs irregular
   bookkeeping and f64 final reductions. Keep scientific logic out of adapters.

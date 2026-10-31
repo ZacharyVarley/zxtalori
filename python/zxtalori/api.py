@@ -28,7 +28,7 @@ def _library():
     ptr = C.c_void_p
     signatures = {
         "zo_create": ([C.c_char_p], ptr), "zo_create_error": ([], C.c_char_p),
-        "zo_destroy": ([ptr], None), "zo_generate": ([ptr, C.c_uint32, C.c_uint32, C.c_uint32, C.c_uint32], C.c_int),
+        "zo_destroy": ([ptr], None), "zo_generate": ([ptr, C.c_uint32, C.c_uint32, C.c_uint32, C.c_uint32, C.c_uint32], C.c_int),
         "zo_random": ([ptr, C.c_uint32, C.c_uint32, C.c_uint32], C.c_int),
         "zo_set": ([ptr, C.c_uint32, C.POINTER(C.c_float), C.c_uint32], C.c_int),
         "zo_count": ([ptr], C.c_uint32), "zo_order": ([ptr], C.c_uint32),
@@ -61,6 +61,16 @@ def _group_id(group):
         raise ValueError(f"group must be one of {', '.join(GROUPS)}") from None
 
 
+KINDS = (None, "hopf", "transport")
+
+
+def _kind_id(kind):
+    try:
+        return KINDS.index(None if kind is None else str(kind).lower())
+    except ValueError:
+        raise ValueError("kind must be 'hopf' or 'transport'") from None
+
+
 def _wgpu_directory():
     if os.environ.get("ZXTALORI_WGPU"):
         return Path(os.environ["ZXTALORI_WGPU"])
@@ -76,9 +86,12 @@ class Grid:
     """A GPU-resident sample of orientation orbits. Close it to release the device.
 
     Quaternions have shape (N,4), scalar first, and right action q*g.
-    C/D grids use the MTEX product-grid port; T/O/I use FCC transports.
+    Every group uses an inverse Hopf product grid by default (``kind="hopf"``):
+    ``h`` is the frequency f, or leave it out for the frequency whose count is
+    nearest ``count``. T/O/I also have FCC transports (``kind="transport"``, ``h``
+    is the lattice semi-edge, default 6).
     """
-    def __init__(self, group="O", *, h=6, count=2048, quaternions=None, exact=False, identity=False, fixed_identity=False):
+    def __init__(self, group="O", *, h=None, count=2048, quaternions=None, exact=False, identity=False, fixed_identity=False, kind=None):
         self._lib = _library()
         self._handle = self._lib.zo_create(str(_wgpu_directory()).encode())
         if not self._handle:
@@ -86,12 +99,19 @@ class Grid:
         self.history = []
         try:
             if quaternions is None:
-                if not 1 <= int(h) <= 64 or not 1 <= int(count) <= 1_000_000:
-                    raise ValueError("h must be 1–64 and count must be 1–1,000,000")
+                kind_id = _kind_id(kind)
+                if kind_id == 2 and _group_id(group) < 8:
+                    raise ValueError("transport grids exist for T, O and I")
+                if h is None:
+                    h = 6 if kind_id == 2 else 0
+                elif not 1 <= int(h) <= (64 if kind_id == 2 else 256):
+                    raise ValueError(f"h must be 1–{64 if kind_id == 2 else 256}")
+                if not 1 <= int(count) <= 1_000_000:
+                    raise ValueError("count must be 1–1,000,000")
                 if exact:
-                    self._check(self._lib.zo_generate_exact(self._handle, _group_id(group), int(count), int(identity or fixed_identity)))
+                    self._check(self._lib.zo_generate_exact(self._handle, _group_id(group), int(count), int(identity or fixed_identity) | kind_id << 8))
                 else:
-                    self._check(self._lib.zo_generate(self._handle, _group_id(group), int(h), int(count), 0))
+                    self._check(self._lib.zo_generate(self._handle, _group_id(group), int(h), int(count), 0, kind_id))
             else:
                 self.set(quaternions, group)
             if identity or fixed_identity:
@@ -306,8 +326,8 @@ class Grid:
         return path
 
 
-def generate(group="O", *, h=6, count=2048, exact=False, identity=False, fixed_identity=False):
-    return Grid(group, h=h, count=count, exact=exact, identity=identity, fixed_identity=fixed_identity)
+def generate(group="O", *, h=None, count=2048, exact=False, identity=False, fixed_identity=False, kind=None):
+    return Grid(group, h=h, count=count, exact=exact, identity=identity, fixed_identity=fixed_identity, kind=kind)
 
 
 def from_quaternions(quaternions, group="O"):

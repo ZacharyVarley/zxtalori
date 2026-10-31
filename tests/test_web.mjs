@@ -122,7 +122,7 @@ try {
              separation: num("separation"), covering: num("covering-radius"), errors: errors() };`);
   check("the app starts on WebGPU", ready.gpu === "ready", ready.adapter);
   if (ready.gpu !== "ready") throw new Error("no WebGPU: " + ready.adapter);
-  check("the startup sample is O at h=6", ready.count === "1,043", ready.count);
+  check("the startup sample is the O inverse Hopf grid nearest 1,000", ready.count === "1,048", ready.count);
   check("its separation and covering radius are measured", ready.separation > 6 && ready.separation < 8 && ready.covering > 6 && ready.covering < 9,
     `separation ${ready.separation}°, covering ${ready.covering}°`);
 
@@ -144,6 +144,23 @@ try {
   check("covering optimization does not raise the covering radius", optimized.after <= optimized.before + 1e-4,
     `${optimized.before}° → ${optimized.after}°`);
   check("points are colored by the largest adjacent cap after covering optimization", optimized.key.startsWith("Largest adjacent cap"), optimized.key);
+
+  const transport = await evaluate(`${helpers}
+    pick("grid-kind", "transport");
+    const shown = !$("h-field").hidden && $("count-field").hidden;
+    $("generate-button").click();
+    await idle();
+    const count = $("point-count").textContent;
+    pick("grid-kind", "hopf");
+    pick("group", "D4");
+    const hidden = $("grid-kind").hidden && $("h-field").hidden && !$("count-field").hidden;
+    $("generate-button").click();
+    await idle();
+    const dihedral = $("point-count").textContent;
+    pick("group", "O");
+    return { shown, count, hidden, dihedral, errors: errors() };`);
+  check("the transport construction generates the FCC grid at h=6", transport.shown && transport.count === "1,043", transport.count);
+  check("D4 uses the inverse Hopf grid nearest 1,000", transport.hidden && transport.dihedral === "978", transport.dihedral);
 
   const near = await evaluate(`${helpers}
     pick("count-mode", "random");

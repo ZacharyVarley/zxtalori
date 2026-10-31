@@ -9,10 +9,10 @@ octahedral grid; pick a group and a count, then relax or optimize the covering.
 
 ## What it does
 
-- **Generates** samples for all eleven proper point groups: the MTEX equispaced product grids for
-  C2–C6 and D2–D6 (with a dihedral polar-parity repair and orbit-aware seam deduplication), FCC
-  lattice transports for T, O and I, seeded Haar-random samples, and exact counts from 32 to
-  1,000,000 (a smaller grid filled at its largest empty Delaunay circumcentres).
+- **Generates** samples for all eleven proper point groups: product grids on the inverse Hopf
+  fibration (the default for every group, never cut at the zone boundary), FCC lattice transports
+  for T, O and I, seeded Haar-random samples, and exact counts from 32 to 1,000,000 (a smaller grid
+  filled at its largest empty Delaunay circumcentres).
 - **Measures** minimum separation, mean geodesic repulsion energy, Riesz s = 1, 2, 3, Green and
   logarithmic energy ratios, and the **covering radius**: the largest empty cap, from a GPU
   Delaunay triangulation of the fundamental zone and a symmetry shell (a port of Gao and Chen's
@@ -43,12 +43,18 @@ python -m zxtalori          # the same app, served locally
 ```python
 import zxtalori as zo
 
-with zo.generate("O", h=6) as sample:          # 1,043 orientations
+with zo.generate("O", count=1000) as sample:   # inverse Hopf grid nearest 1,000: 1,048 orientations
     sample.relax(30)
     print(sample.measure()["separation_deg"], sample.covering()["covering_radius_deg"])
     sample.optimize_covering(2000)             # lowers it; the best sample is kept
     q = sample.quaternions                     # NumPy (N, 4), scalar first
     sample.save("octahedral.json")             # opens in the web app
+
+with zo.generate("D6", h=12) as sample:         # frequency f=12: 2,936 orientations
+    print(sample.covering()["covering_excess"])
+
+with zo.generate("O", h=6, kind="transport") as sample:   # FCC transport, semi-edge 6: 1,043
+    sample.relax(30)
 
 with zo.haar("O", count=100_000, seed=193) as sample:
     sample.relax(100, neighbourhood=20)        # near-field forces; 0 for all pairs

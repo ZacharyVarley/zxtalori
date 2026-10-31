@@ -12,7 +12,7 @@ try {
   report.stage='Generate and compare grids';
   for(const [key,expected] of Object.entries(reference)){
     const [group,h]=key.split('_'),id={T:8,O:9,I:10}[group];
-    const snapshot=await engine.generate(id,+h,2048);
+    const snapshot=await engine.generate(id,+h,2048,193,id>=8?'transport':null);
     const q=snapshot.quaternions;
     let maximum=0,worst=-1;
     for(let i=0;i<expected.length;i++){
@@ -33,7 +33,7 @@ try {
   const extremeRescaled=(await engine.set(0,Float32Array.from(extreme,x=>x*3e38))).quaternions;
   for(let i=0;i<extreme.length;i++)importError=Math.max(importError,Math.abs(extremeNormalized[i]-extremeRescaled[i]));
   report.import_scale_invariance={maximum_component_error:importError,passed:importError<5e-7};
-  await engine.generate(9,6,2048);
+  await engine.generate(9,6,2048,193,'transport');
   const initial=(await engine.measure()).stats;
   const moved=(await engine.relax(2)).stats;
   const refreshed=(await engine.measure()).stats;
@@ -72,7 +72,7 @@ try {
   await engine.identity({fixed:false});
   const coveringReference=await(await fetch('/qa/covering-reference.json',{cache:'no-store'})).json();
   for(const [id,[group,expected]] of Object.entries(coveringReference).entries()){
-    const generated=await engine.generate(id,2,100);
+    const generated=await engine.generate(id,2,100,193,id>=8?'transport':null);
     const start=performance.now(),measured=(await engine.covering()).stats;
     await engine.relax(1);const stale=(await engine.snapshot()).stats;
     const current=(await engine.covering()).stats;

@@ -1,5 +1,4 @@
 pub const probe = @embedFile("probe.wgsl");
-pub const mtex = @embedFile("mtex.wgsl");
 pub const state = @embedFile("state.wgsl");
 pub const grid_tables = @embedFile("grid_tables.wgsl");
 pub const grids = @embedFile("grids.wgsl");

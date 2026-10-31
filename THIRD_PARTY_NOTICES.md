@@ -3,22 +3,12 @@
 zxtalori is distributed under the MIT license (`LICENSE`), copyright 2026
 Zachary T. Varley. Third-party components keep their own notices below.
 
-## C/D equispaced grids
-
-`src/mtex.zig` and `shaders/mtex.wgsl` implement the C/D branch of the
-equispaced SO(3) grid construction of Bachmann, Hielscher & Schaeben (2010), as
-used by MTEX's equispacedSO3Grid and equispacedS2Grid. They keep MATLAB rounding,
-polar staggering, fibre holonomy and the ZYZ convention so that counts and points
-match MTEX (checked against the fixtures in `tests/fixtures/mtex-cd.*`). The
-default uses the `skip_dihedral_equator=True` repair. Orbit-aware deduplication
-accounts for f32 seam representation differences. Please cite Bachmann,
-Hielscher & Schaeben (2010).
-
 ## Code from the author's other projects
 
 The GPU abstraction in `src/gpu/`, browser GPU adapter, dependency fetcher,
 wheel/build backend and Python local launcher come from zcmir; T/O/I group
-geometry, transport coefficients and formulas come from SO3K_Transports. Both
+geometry, transport coefficients, the inverse Hopf product-grid construction and formulas
+come from SO3K_Grids (formerly SO3K_Transports). Both
 are by the same author under the same MIT license. Registration-specific
 front-end/engine logic is not included. The browser import module remains named
 `zcgpu` for ABI reuse.

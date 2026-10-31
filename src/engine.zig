@@ -3,7 +3,7 @@ const std = @import("std");
 pub const gpu = @import("gpu/gpu.zig");
 const groups = @import("groups.zig");
 const grids = @import("grids.zig");
-const mtex = @import("mtex.zig");
+const hopf = @import("hopf.zig");
 const dedup = @import("dedup.zig");
 const pairs = @import("pairs.zig");
 const insert = @import("insert.zig");
@@ -11,6 +11,8 @@ const covering = @import("covering.zig");
 const clock = @import("clock.zig");
 const shaders = @import("shaders");
 pub const version = "0.1.0";
+/// Inverse Hopf product grids are the default for every group; T/O/I also have FCC transports.
+pub const GridKind = enum(u32) { default, hopf, transport };
 
 pub const Engine = struct {
     allocator: std.mem.Allocator,
@@ -25,7 +27,8 @@ pub const Engine = struct {
     h: u32 = 0,
     seed: u32 = 0,
     generator: []const u8 = "none",
-    removed_duplicates: u32 = 0,
+    /// The construction of the current grid, "hopf" or "transport"; null otherwise.
+    grid_kind: ?[]const u8 = null,
     measures: ?pairs.Measures = null,
     /// The iteration `measures` describe (later steps may have moved the sample since).
     measure_iteration: u32 = 0,
@@ -155,6 +158,7 @@ pub const Engine = struct {
         var index = self.identityIndex();
         if (add and index == null) {
             const generator = self.generator;
+            const grid_kind = self.grid_kind;
             const h = self.h;
             const base_count = self.base_count;
             const inserted_count = self.inserted_count;
@@ -164,6 +168,7 @@ pub const Engine = struct {
             @memcpy(values[self.host.len..], &[_]f32{ 1, 0, 0, 0 });
             try self.set(self.group, values);
             self.generator = generator;
+            self.grid_kind = grid_kind;
             self.h = h;
             self.base_count = base_count;
             self.inserted_count = inserted_count;
@@ -180,42 +185,20 @@ pub const Engine = struct {
             self.relax_state.dropCache(self.allocator);
         }
     }
-    pub fn generateExact(self: *Engine, group: groups.Group, target: u32, add_identity: bool) !void {
+    pub fn generateExact(self: *Engine, group: groups.Group, target: u32, add_identity: bool, kind: GridKind) !void {
         if (target < 32 or target > 1000000) return error.ExactCountRange32To1000000;
+        const budget = target - @as(u32, if (add_identity) 1 else 0);
         var h: u32 = 1;
-        var request: u32 = 8;
-        if (@intFromEnum(group) < 8) {
-            const budget = target - @as(u32, if (add_identity) 1 else 0);
-            var best: u32 = 0;
-            // Counts change only when either rounded angular subdivision changes.
-            const order = @as(f64, @floatFromInt(groups.operations(group).len));
-            const beta: f64 = if (@intFromEnum(group) < 4) std.math.pi else std.math.pi / 2.0;
-            const gamma = if (@intFromEnum(group) < 4) std.math.pi / order else 2 * std.math.pi / order;
-            for ([_]f64{ beta, gamma }) |axis| {
-                var j: u32 = 0;
-                while (true) : (j += 1) {
-                    const radius = (@as(f64, @floatFromInt(j)) + 0.5) / axis;
-                    const boundary = radius * radius * radius * beta * gamma;
-                    if (boundary > @as(f64, @floatFromInt(target * 2)) + 3) break;
-                    const centre: i64 = @intFromFloat(@floor(boundary));
-                    for (0..5) |offset| {
-                        const r = @max(8, centre + @as(i64, @intCast(offset)) - 2);
-                        if (r > target * 2) continue;
-                        const count = try mtex.rawCount(group, @intCast(r));
-                        if (count <= budget and count > best) {
-                            best = count;
-                            request = @intCast(r);
-                        }
-                    }
-                }
-            }
+        if (try resolveKind(group, kind) == .transport) {
+            while (h < 64 and try grids.count(group, h + 1) <= budget) : (h += 1) {}
         } else {
-            while (h < 64 and try grids.count(group, h + 1) <= target) : (h += 1) {}
+            h = hopf.largestFrequency(group, budget) orelse return error.BaseGridExceedsTarget;
         }
-        try self.generate(group, h, request, 0);
+        try self.generate(group, h, target, 0, kind);
         const base_count = self.n;
         if (add_identity) try self.identity(true, self.fix_identity);
         const generator = self.generator;
+        const grid_kind = self.grid_kind;
         for (0..8) |_| {
             if (self.n == target) break;
             if (self.n > target) return error.BaseGridExceedsTarget;
@@ -231,7 +214,8 @@ pub const Engine = struct {
         }
         if (self.n != target) return error.InsufficientDelaunayCentres;
         self.generator = generator;
-        self.h = if (@intFromEnum(group) < 8) 0 else h;
+        self.grid_kind = grid_kind;
+        self.h = h;
         self.base_count = base_count;
         self.inserted_count = target - base_count;
     }
@@ -240,37 +224,39 @@ pub const Engine = struct {
         const pipe = try self.g.pipeline("state/fold", shaders.state, "fold");
         self.g.dispatch(pipe, (n + 255) / 256, 1, 1, &.{ q.at(0), self.ops.at(1), self.g.uniform(2, std.mem.asBytes(&u)) });
     }
-    pub fn generate(self: *Engine, group: groups.Group, h: u32, target: u32, seed: u32) !void {
-        if (h > 64 or target > 1000000) return error.GridTooLarge;
-        const cyclic = @intFromEnum(group) < 8;
-        const r = if (cyclic) blk: {
-            const v = try mtex.generate(self.allocator, &self.g, group, if (target == 0) 2048 else target);
+    fn resolveKind(group: groups.Group, kind: GridKind) !GridKind {
+        if (kind != .transport) return .hopf;
+        return if (@intFromEnum(group) < 8) error.TransportNeedsTOrOOrI else .transport;
+    }
+    /// h is the frequency f (hopf) or the lattice semi-edge (transport). h = 0 takes the
+    /// frequency whose count is nearest the target; counts are never cut or deduplicated.
+    pub fn generate(self: *Engine, group: groups.Group, h: u32, target: u32, seed: u32, kind: GridKind) !void {
+        if (target > 1000000) return error.GridTooLarge;
+        const resolved = try resolveKind(group, kind);
+        const resolution = switch (resolved) {
+            .transport => @max(1, h),
+            else => if (h == 0) hopf.nearestFrequency(group, if (target == 0) 2048 else target) else h,
+        };
+        const r = if (resolved == .transport) try grids.generate(self.allocator, &self.g, group, resolution) else blk: {
+            const v = try hopf.generate(self.allocator, &self.g, group, resolution);
             break :blk grids.Result{ .quats = v.quats, .count = v.count };
-        } else try grids.generate(self.allocator, &self.g, group, @max(1, h));
+        };
         var q = r.quats;
         errdefer self.g.release(&q);
-        var host = try self.fetch(q, r.count);
+        const host = try self.fetch(q, r.count);
         errdefer self.allocator.free(host);
-        var n = r.count;
-        self.removed_duplicates = 0;
-        if (cyclic) {
-            const keep = try dedup.compact(self.allocator, host, groups.operations(group), 0);
-            if (keep != n) {
-                self.removed_duplicates = n - @as(u32, @intCast(keep));
-                n = @intCast(keep);
-                const compact = try self.allocator.dupe(f32, host[0 .. keep * 4]);
-                self.allocator.free(host);
-                host = compact;
-                self.g.writeSlice(q, 0, f32, host);
-            }
-        }
         self.setGroup(group);
-        self.adopt(q, host, n);
-        self.h = if (cyclic) 0 else @max(1, h);
+        self.adopt(q, host, r.count);
+        self.h = resolution;
         self.seed = seed;
-        self.base_count = n;
+        self.base_count = r.count;
         self.inserted_count = 0;
-        self.generator = if (cyclic) "MTEX equispacedSO3Grid (seam repair)" else switch (group) {
+        self.grid_kind = @tagName(resolved);
+        self.generator = if (resolved == .hopf) switch (hopf.rootOf(group)) {
+            .I => "Inverse Hopf product grid (icosahedral root)",
+            .O => "Inverse Hopf product grid (octahedral root)",
+            else => "Inverse Hopf product grid (hexagonal root)",
+        } else switch (group) {
             .T => "FCC octahedron transport",
             .O => "FCC truncated cube transport",
             .I => "FCC cube transport",
@@ -299,7 +285,7 @@ pub const Engine = struct {
         self.adopt(q, host, n);
         self.h = 0;
         self.generator = "Imported quaternions";
-        self.removed_duplicates = 0;
+        self.grid_kind = null;
         self.base_count = n;
         self.inserted_count = 0;
     }
@@ -348,6 +334,7 @@ pub const Engine = struct {
         const host = try self.fetch(q, count);
         self.adopt(q, host, count);
         self.generator = "Haar random";
+        self.grid_kind = null;
         self.h = 0;
         self.seed = seed;
         self.base_count = count;
@@ -892,10 +879,10 @@ pub const Engine = struct {
             .count = self.n,
             .count_extended = @as(u64, 2) * groups.operations(self.group).len * self.n,
             .generator = self.generator,
+            .grid = self.grid_kind,
             .h = self.h,
             .seed = self.seed,
             .iteration = self.iteration,
-            .removed_duplicates = self.removed_duplicates,
             .fixed_identity = self.fix_identity,
             .identity_index = self.identityIndex(),
             .base_count = self.base_count,

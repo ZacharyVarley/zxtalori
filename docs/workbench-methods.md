@@ -51,11 +51,10 @@ the energy-ratio convention but is not the SO(3) display count.
 ## Exact-count construction
 
 `zo_generate_exact` / `generate(..., exact=True)` share the same Zig path in
-Python and WebAssembly. For T/O/I, select the highest lattice semi-edge whose
-count fits the budget. For C/D, `mtex.rawCount` evaluates the actual MTEX ring
-sum `gamma_count * sum_ring azimuthal_steps` using the same rounding/parity
-rules as generation. Enumerate angular-rounding boundaries to choose the largest fitting
-grid; subsequent seam compaction may reduce that count further.
+Python and WebAssembly. Scan the frequencies for the inverse Hopf grid with the
+largest count that fits the budget (counts are not monotonic in f for the
+octahedral root). With `kind="transport"`, select the highest lattice semi-edge
+whose count fits.
 
 Only representatives and nearby symmetry images are kept. The shell streams
 all operators and both antipodes of boundary-near sources; it does not assume

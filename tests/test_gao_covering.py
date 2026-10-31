@@ -8,7 +8,7 @@ from test_covering import full_orbit_covering
 
 @pytest.mark.parametrize('group',zo.GROUPS)
 def test_source_guided_gao_covering(group):
-    with zo.generate(group,h=2,count=100) as grid:
+    with zo.generate(group,h=2,count=100,kind='transport' if group in ('T','O','I') else None) as grid:
         grid._lib.zo_delaunay_mode.argtypes=[C.c_void_p,C.c_uint32]
         grid._lib.zo_delaunay_mode(grid._handle,32)
         for step in [0,3]:

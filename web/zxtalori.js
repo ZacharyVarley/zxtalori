@@ -3,6 +3,8 @@
  */
 const utf8 = new TextDecoder();
 const utf8enc = new TextEncoder();
+const GRID_KINDS = [null,'hopf','transport'];
+function gridKind(kind) { const i=GRID_KINDS.indexOf(kind??null); if(i<0) throw new Error("kind must be 'hopf' or 'transport'"); return i; }
 const newStats = () => ({dispatches:0,submits:0,reads:0,waits:0,waitMs:0,compileWaitMs:0,pipelines:0,pipelineMs:0});
 // The engine build's identity: FNV-1a over the module's bytes, sampled with a stride.
 function buildId(binary) { const b=new Uint8Array(binary); let h=0x811c9dc5^b.length; for(let i=0;i<b.length;i+=7) h=Math.imul(h^b[i],0x01000193); return (h>>>0).toString(36); }
@@ -396,10 +398,11 @@ export class Zxtalori {
     if(this.state.errors.length) throw new Error(this.state.errors.shift());
     return this.snapshot();
   }
-  generate(group,h,target=2048,seed=193) {return this.enqueue(()=>this.call('zo_generate',group,h,target,seed));}
+  // kind: 'hopf' (default; h is the frequency, 0 for the one nearest target) or, for T/O/I, 'transport' (h is the FCC semi-edge).
+  generate(group,h,target=2048,seed=193,kind=null) {return this.enqueue(()=>this.call('zo_generate',group,h,target,seed,gridKind(kind)));}
   random(group,count,seed) {return this.enqueue(()=>this.call('zo_random',group,count,seed));}
   mesh() {return this.enqueue(async()=>{await this.call('zo_mesh');const n=this.x.zo_mesh_vertex_count(this.handle),t=this.x.zo_mesh_tet_count(this.handle);return {vertices:new Float32Array(this.memory,this.x.zo_mesh_vertices(this.handle),n*4).slice(),tets:new Uint32Array(this.memory,this.x.zo_mesh_tets(this.handle),t*4).slice()};});}
-  generateExact(group,count,{identity=false}={}) {return this.enqueue(()=>this.call('zo_generate_exact',group,count,+identity));}
+  generateExact(group,count,{identity=false,kind=null}={}) {return this.enqueue(()=>this.call('zo_generate_exact',group,count,+identity|gridKind(kind)<<8));}
   measure() {return this.enqueue(()=>this.call('zo_measure'));}
   covering() {return this.enqueue(()=>this.call('zo_cover'));}
   relax(steps=1) {return this.enqueue(()=>this.call('zo_relax',steps));}

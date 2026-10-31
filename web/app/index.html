@@ -72,11 +72,19 @@
     <fieldset id="count-mode" class="field">
       <legend class="field-label">Initialization</legend>
       <div class="segmented">
-        <label title="Native lattice or MTEX grid"><input type="radio" name="count-mode" value="grid" checked><span>Grid</span></label>
+        <label title="Inverse Hopf product grid or FCC transport"><input type="radio" name="count-mode" value="grid" checked><span>Grid</span></label>
         <label title="Exact orientation count"><input type="radio" name="count-mode" value="exact"><span>Exact count</span></label>
         <label title="Seeded Haar random samples"><input type="radio" name="count-mode" value="random"><span>Random</span></label>
       </div>
       <p id="count-note" class="hint"></p>
+    </fieldset>
+
+    <fieldset id="grid-kind" class="field">
+      <legend class="field-label">Construction</legend>
+      <div class="segmented">
+        <label title="Product grid on the inverse Hopf fibration"><input type="radio" name="grid-kind" value="hopf" checked><span>Inverse Hopf</span></label>
+        <label title="FCC lattice carried onto the zone by measure-preserving transport"><input type="radio" name="grid-kind" value="transport"><span>Transport</span></label>
+      </div>
     </fieldset>
 
     <div id="h-field" class="field"><label class="field-label" for="semi-edge">Lattice semi-edge <i>h</i></label><input id="semi-edge" type="number" min="1" max="12" value="6"></div>

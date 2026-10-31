@@ -4,15 +4,20 @@ const groups = @import("groups.zig");
 export fn zo_version() [*:0]const u8 {
     return @import("engine.zig").version;
 }
-export fn zo_generate(e: *Engine, id: u32, h: u32, target: u32, seed: u32) i32 {
+// kind: 0 the default (inverse Hopf product), 1 inverse Hopf product, 2 FCC transport (T/O/I only).
+// h: frequency or semi-edge; 0 takes the inverse Hopf frequency whose count is nearest target.
+export fn zo_generate(e: *Engine, id: u32, h: u32, target: u32, seed: u32, kind: u32) i32 {
     if (id >= 11) return e.fail("Unknown group", .{});
+    if (kind > 2) return e.fail("Unknown grid kind", .{});
     const group: groups.Group = @enumFromInt(id);
-    e.generate(group, h, target, seed) catch |err| return e.fail("Generation failed: {s}", .{@errorName(err)});
+    e.generate(group, h, target, seed, @enumFromInt(kind)) catch |err| return e.fail("Generation failed: {s}", .{@errorName(err)});
     return 0;
 }
 export fn zo_generate_exact(e: *Engine, id: u32, target: u32, flags: u32) i32 {
     if (id >= 11) return e.fail("Unknown group", .{});
-    e.generateExact(@enumFromInt(id), target, flags & 1 != 0) catch |err| return e.fail("Exact-count generation: {s}", .{@errorName(err)});
+    // flags: bit 0 adds the identity; bits 8-15 are the grid kind, as in zo_generate.
+    if ((flags >> 8) & 0xff > 2) return e.fail("Unknown grid kind", .{});
+    e.generateExact(@enumFromInt(id), target, flags & 1 != 0, @enumFromInt((flags >> 8) & 0xff)) catch |err| return e.fail("Exact-count generation: {s}", .{@errorName(err)});
     return 0;
 }
 export fn zo_set(e: *Engine, id: u32, p: [*]const f32, n: u32) i32 {

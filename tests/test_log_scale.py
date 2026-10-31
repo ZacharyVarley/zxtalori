@@ -42,7 +42,7 @@ def main():
     random=np.random.default_rng(936).normal(size=(1000,4));random/=np.linalg.norm(random,axis=1,keepdims=True)
     cases=[('T',5,None),('O',6,None),('I',6,None),('O',None,random),('I',None,random)]
     for group,h,points in cases:
-        with zo.generate(group,h=h) if points is None else zo.from_quaternions(points,group) as grid:
+        with zo.generate(group,h=h,kind='transport') if points is None else zo.from_quaternions(points,group) as grid:
             t0=time.perf_counter();actual=grid.measure()['log_ratio'];gpu_seconds=time.perf_counter()-t0
             expected=reference_log(grid.quaternions,grid.operations)
             error=abs(actual-expected)

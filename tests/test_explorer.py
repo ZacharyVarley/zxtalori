@@ -13,7 +13,7 @@ def test_haar_repeatable_and_invariant_uniform():
     with zo.haar('C2',count=20000,seed=48) as g:np.testing.assert_array_equal(g.quaternions,q)
 
 def test_actual_shell_mesh_export():
-    with zo.generate('O',h=2) as g:
+    with zo.generate('O',h=2,kind='transport') as g:
         mesh=g.triangulation()
         assert len(mesh['stereographic'])>=len(g)
         assert len(mesh['tetrahedra'])>0

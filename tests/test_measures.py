@@ -59,7 +59,7 @@ def main():
             for key in expected:
                 np.testing.assert_allclose(invariant[key],actual[key],rtol=4e-4,atol=4e-4,err_msg=f'{group} antipodes {key}')
             report[group]={'random_measures':True,'antipodal_invariance':True,'max_measure_absolute_error':float(max(abs(actual[k]-v) for k,v in expected.items()))}
-        with zo.generate(group,h=3,count=256) as grid:
+        with zo.generate(group,h=3,count=256,kind='transport' if group in ('T','O','I') else None) as grid:
             initial=grid.measure()['quey_energy']
             grid.relax(steps=3)
             quick=grid.stats

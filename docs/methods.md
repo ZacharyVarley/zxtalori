@@ -2,14 +2,46 @@
 
 ## Generation
 
-C/D use the archived MTEX product-grid port. Zig constructs polar rings and
-the fibre grid in f64; WGSL converts ZYZ angles, applies right group action,
-and folds to the identity zone. The dihedral polar-parity repair avoids
-equatorial orbit twins. A streaming spatial hash removes remaining seam twins
-within a 2e-6 quaternion chord tolerance, querying group images without storing
-an expanded point cloud. Count requests are approximate, as in MTEX.
+Every group defaults to a product grid on the inverse Hopf fibration, ported
+from SO3K_Grids `so3k/product.py` to `src/hopf.zig`. The projection
+pi(q) = q^-1 z satisfies pi(q g) = g^-1 pi(q), so SO(3)/K fibres over the
+sphere modulo K, with fibres R_z(t) q. Three root grids are built directly:
 
-T uses an FCC octahedron, O an FCC truncated cube, and I an FCC cube through
+| Root | Serves | Sphere grid | Spins n |
+|---|---|---|---|
+| I | C2 C3 D2 D3 T I | area-preserving icosahedral, 10f^2 + 2 nodes | 5f |
+| O | C4 D4 O | area-preserving octahedral, 4f^2 + 2 nodes | 4f below f=6, then 4f - 12 floor(f/9 + 1/2) |
+| D6 | C6 D6 | equal-area latitude rings | 6 ceil(2f/3) |
+
+The flat faces of the polyhedron are subdivided at frequency f, and a
+Knothe–Rosenblatt map in the O_h or I_h chambers carries the nodes to the sphere
+with constant area. With the chamber's far edge on one plane, both azimuthal
+marginals have closed forms, which the reference integrates numerically.
+
+Each K-orbit of nodes contributes its node v in the sector at z, the cell of the
+vertex z (for D6 the northern hemisphere) at azimuths 0 to 2 pi / m, m the order
+of the z axis, so that neighbouring sections are nearly aligned. With stabilizer
+order k, the grid takes R_z((2 pi j + phi) / n) s(v) for j < n / k, with s(v) the
+shortest rotation taking v to z. Alternate layers are staggered by half a spin
+step, phi = pi (l mod 2), where l is f - max(i, j, k) for barycentric indices, or
+for D6 the ring number from the nearest pole. Every stabilizer order divides n,
+so each orbit appears once: N_FZ = n |V| / |K|.
+
+Any other group H inherits the root P that contains it: with R H R^-1 inside P,
+the grid is one q c R per H-orbit, c over the cosets of R H R^-1 in P. The
+H-extended set is the P-extended set rotated by R, so every measure of it is the
+parent's. N_FZ grows by |P| / |H|. The rotations R come from
+`so3k.product.embedding`, tabulated in `src/hopf.zig`.
+
+The whole construction is f64 on the host, O(N |K|) with no iteration, and
+nothing is cut or deduplicated. Counts jump with f and are not monotonic for the
+octahedral root (f=13 gives 1,130 points for O, f=14 gives 1,048). A requested
+count takes the frequency nearest it by ratio. All eleven groups match the
+reference row for row, up to the zone image of boundary points, to 5e-8 in
+quaternion chord. Their covering excess and mesh ratio match its records.
+`kind="transport"` keeps the T/O/I transports below.
+
+The transports: T uses an FCC octahedron, O an FCC truncated cube, and I an FCC cube through
 the cubochoric/homochoric map. WGSL evaluates the current transport fits and
 quadrature/Newton inversions. The I source-CDF polynomial was regenerated and
 checked when the tables were exported. Tests include source ordering,

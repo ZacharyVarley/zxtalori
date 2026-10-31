@@ -4,7 +4,6 @@ Run with PYTHONPATH=python after building the native engine. Symmetry expansion
 below is confined to these small independent tests, never the product engine.
 """
 from pathlib import Path
-import json
 
 import numpy as np
 import pytest
@@ -48,7 +47,7 @@ def test_native_transport(group, h):
     fixture = "reference-small.npz" if h == 2 else "transports-h8-h12.npz"
     with np.load(FIXTURES / fixture) as data:
         expected = data[group if h == 2 else f"{group}_{h}"]
-    with zxtalori.generate(group, h=h) as grid:
+    with zxtalori.generate(group, h=h, kind="transport") as grid:
         actual = grid.quaternions
         assert len(grid) == len(expected)
         check_geometry(actual, grid.operations)
@@ -57,24 +56,3 @@ def test_native_transport(group, h):
         assert errors.max() < 3e-6, (group, h, errors.max())
         assert minimum_orbit_chord(actual, grid.operations) > 1e-4
         assert grid.stats["group"] == group
-
-
-@pytest.mark.parametrize("group", ["C2", "C3", "C4", "C6", "D2", "D3", "D4", "D6"])
-@pytest.mark.parametrize("target", [257, 1024])
-def test_native_mtex_product(group, target):
-    metadata = json.loads((FIXTURES / "mtex-cd.json").read_text())
-    assert metadata["skip_dihedral_equator"] is True
-    with np.load(FIXTURES / "mtex-cd.npz") as data:
-        expected = data[f"{group}_{target}"]
-    with zxtalori.generate(group, count=target) as grid:
-        actual = grid.quaternions
-        assert len(grid) == len(expected), (group, target, len(grid), len(expected))
-        operations = grid.operations.astype(np.float64)
-        check_geometry(actual, operations)
-        # MTEX product grids live in an Euler-box domain. The native engine
-        # chooses closest-identity zone representatives, so compare orbits.
-        forward = cKDTree(orbit_cloud(expected.astype(np.float64), operations)).query(actual, k=1)[0]
-        backward = cKDTree(orbit_cloud(actual.astype(np.float64), operations)).query(expected, k=1)[0]
-        assert forward.max() < 4e-6, (group, target, "native -> reference", forward.max())
-        assert backward.max() < 4e-6, (group, target, "reference -> native", backward.max())
-        assert minimum_orbit_chord(actual, operations) > 1e-5, (group, target, "near-duplicate orbit")

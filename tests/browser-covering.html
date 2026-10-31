@@ -11,14 +11,14 @@ try{
   const reference=await(await fetch('/qa/covering-reference.json',{cache:'no-store'})).json();
   for(const [id,[group,expected]] of Object.entries(reference).entries()){
     report.stage=`Covering ${group}`;show();
-    const generated=await engine.generate(id,2,100),start=performance.now();
+    const generated=await engine.generate(id,2,100,193,id>=8?'transport':null),start=performance.now();
     const measured=(await engine.covering()).stats;
     await engine.relax(1);const stale=(await engine.snapshot()).stats;
     const refreshed=(await engine.covering()).stats;
     report.groups.push({group,count:generated.quaternions.length/4,radius_deg:measured.covering_radius_deg,oracle_radius_deg:expected.radius_deg,milliseconds:performance.now()-start,
       passed:generated.quaternions.length===4*expected.count&&Math.abs(measured.covering_radius_deg-expected.radius_deg)<2e-4&&measured.covering_current&&!stale.covering_current&&refreshed.covering_current&&refreshed.covering_iteration===1});show();
   }
-  report.stage='O h=12, FZ plus shell';show();await engine.generate(9,12);
+  report.stage='O h=12, FZ plus shell';show();await engine.generate(9,12,2048,193,'transport');
   for(let sample=0;sample<3;sample++){
     const start=performance.now(),stats=(await engine.covering()).stats;
     report.large.push({sample,count:7637,shell_sites:stats.covering_shell_points,radius_deg:stats.covering_radius_deg,milliseconds:performance.now()-start,
@@ -26,7 +26,7 @@ try{
   }
   if(new URL(location.href).searchParams.has('100k')){
     report.stage='O h=29, about 100k FZ representatives';show();
-    const generated=await engine.generate(9,29);
+    const generated=await engine.generate(9,29,2048,193,'transport');
     for(let sample=0;sample<3;sample++){
       const start=performance.now(),stats=(await engine.covering()).stats;
       report.hundred_k.push({sample,count:generated.quaternions.length/4,shell_sites:stats.covering_shell_points,radius_deg:stats.covering_radius_deg,milliseconds:performance.now()-start,

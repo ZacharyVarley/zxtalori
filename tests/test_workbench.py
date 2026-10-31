@@ -31,7 +31,7 @@ def test_exact_count_identity_and_zone_after_relaxation(group):
 
 
 def test_add_identity_is_idempotent_and_preserves_generator():
-    with zxtalori.generate('C4',count=500) as grid:
+    with zxtalori.generate('D3',count=500) as grid:
         n=len(grid);name=grid.stats['generator']
         grid.identity(add=True,fixed=True)
         assert len(grid)==n+1
