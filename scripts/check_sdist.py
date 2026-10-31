@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
-    archive = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / "dist/zxtalori-0.1.0.tar.gz"
+    archive = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else ROOT / "dist/zxtalori-0.2.0.tar.gz"
     cache = ROOT / ".deps"
     staging = Path(tempfile.mkdtemp(prefix="source-check-", dir=cache)).resolve()
     assert staging.is_relative_to(cache.resolve())
