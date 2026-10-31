@@ -10,7 +10,7 @@ const insert = @import("insert.zig");
 const covering = @import("covering.zig");
 const clock = @import("clock.zig");
 const shaders = @import("shaders");
-pub const version = "0.2.0";
+pub const version = "0.2.1";
 /// Inverse Hopf product grids are the default for every group; T/O/I also have FCC transports.
 pub const GridKind = enum(u32) { default, hopf, transport };
 
