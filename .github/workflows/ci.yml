@@ -97,7 +97,7 @@ jobs:
   # The engine on a real GPU: Apple M1 (Metal), from the cross-built wheel.
   gpu-macos:
     needs: build
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     env:
       PYTHONUNBUFFERED: "1"
