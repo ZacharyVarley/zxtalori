@@ -167,10 +167,12 @@ budget: up to 256 pairs, skipping images of the same source, whose distance a
 left move keeps. The LP gains the linearized constraints theta + h.d >= theta_min
 with clamped multipliers, and picks its best iterate by exact penalty. A move is
 kept only if no listed pair falls below the floor, and no pair already below it
-gets nearer. On O at N = 1043 for 30 s, no floor reached 6.09% excess, with
+gets nearer. Kicks and full-pass steps can break the floor, so after either, a
+descent's lowest sample becomes the best only if its measured separation holds
+the floor. On O at N = 1043 for 30 s, no floor reached 6.09% excess, with
 separation falling from 7.97 to 6.32 degrees. A floor at 90% of the start also
 reached 6.09%, holding separation at 7.17 degrees; a floor at 100% reached 6.28%
-with separation unchanged. Full-pass steps do not enforce the floor.
+with separation unchanged.
 
 A job holds at most 192 gathered points and 256 caps. Lattice-like or
 co-spherical samples can exceed that; when most of a step's jobs are skipped,

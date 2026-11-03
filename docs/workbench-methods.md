@@ -170,3 +170,13 @@ after a failure), records each finished operation with its time and result: gene
 checks (shell, fence and exact-predicate counts), relaxation and optimization
 runs, stops and failures. The central pane spans the full height; the GPU chip
 sits at the bottom right.
+
+The sidebar has two tabs, Instantiate and Optimize. The identity toggles act on
+the sample at once; turning Identity off removes only a point the toggle added.
+The Auto objective runs repulsion, then covering, each limited by Steps.
+Repulsion ends when the lowest energy gains under 1e-9 per step, relative, over
+two windows of 100 steps in a row, since Barzilai–Borwein steps spike and
+recover. Covering is judged only at the engine's kicks, which come once a descent
+has plateaued, so a sample just kicked is never judged: it ends after four kicks
+without a relative gain of 5e-4 in the best radius. Its separation floor is 99%
+of the separation repulsion reached by default.

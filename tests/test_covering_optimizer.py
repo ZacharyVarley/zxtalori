@@ -74,3 +74,14 @@ def test_separation_floor_holds():
         assert grid.measure()['separation_deg']>=floor*(1-1e-5)
         with pytest.raises(ValueError):
             grid.optimize_covering(1,min_separation_deg=200)
+
+
+def test_separation_floor_holds_through_kicks():
+    with zxtalori.generate('O',count=300) as grid:
+        grid.relax(100)
+        start=grid.covering()['covering_radius_deg']
+        floor=0.99*grid.measure()['separation_deg']
+        grid.optimize_covering(1000,min_separation_deg=floor)
+        assert grid.stats['covering_optimizer_kicks']>0
+        assert grid.stats['covering_radius_deg']<start
+        assert grid.measure()['separation_deg']>=floor*(1-1e-5)

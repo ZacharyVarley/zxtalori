@@ -28,7 +28,7 @@
 
 <main class="workspace">
 
-<aside class="sidebar panel" aria-label="Sample and relaxation">
+<aside class="sidebar panel" aria-label="Instantiate and optimize">
 
   <header class="side-head">
     <a class="brand" href="./">
@@ -42,9 +42,12 @@
     </div>
   </header>
 
-  <section class="section">
-    <header class="section-head"><h2>Sample</h2></header>
+  <div class="pane-tabs side-tabs" role="tablist" aria-label="Workflow">
+    <button id="tab-instantiate" role="tab" aria-selected="true" aria-controls="instantiate-panel">Instantiate</button>
+    <button id="tab-optimize" role="tab" aria-selected="false" aria-controls="optimize-panel" tabindex="-1">Optimize</button>
+  </div>
 
+  <section id="instantiate-panel" class="section" role="tabpanel" aria-labelledby="tab-instantiate">
     <fieldset id="group" class="field">
       <legend class="field-label">Symmetry group</legend>
       <div class="group-picker">
@@ -66,17 +69,15 @@
           <label class="chip"><input type="radio" name="group" value="I"><span>I</span></label>
         </div></div>
       </div>
-      <p id="group-order" class="hint">Octahedral · 24 rotations</p>
     </fieldset>
 
     <fieldset id="count-mode" class="field">
       <legend class="field-label">Initialization</legend>
       <div class="segmented">
         <label title="Inverse Hopf product grid or FCC transport"><input type="radio" name="count-mode" value="grid" checked><span>Grid</span></label>
-        <label title="Exact orientation count"><input type="radio" name="count-mode" value="exact"><span>Exact count</span></label>
-        <label title="Seeded Haar random samples"><input type="radio" name="count-mode" value="random"><span>Random</span></label>
+        <label title="Exact orientation count: a smaller grid filled at its largest Delaunay circumcentres"><input type="radio" name="count-mode" value="exact"><span>Exact count</span></label>
+        <label title="Independent Haar samples, folded into the selected zone"><input type="radio" name="count-mode" value="random"><span>Random</span></label>
       </div>
-      <p id="count-note" class="hint"></p>
     </fieldset>
 
     <fieldset id="grid-kind" class="field">
@@ -87,31 +88,47 @@
       </div>
     </fieldset>
 
-    <div id="h-field" class="field"><label class="field-label" for="semi-edge">Lattice semi-edge <i>h</i></label><input id="semi-edge" type="number" min="1" max="12" value="6"></div>
-    <div id="count-field" class="field" hidden><label class="field-label" for="target-count" id="target-label">Requested count</label><input id="target-count" type="number" min="32" max="1000000" step="1" value="1000"></div>
     <div id="seed-field" class="field" hidden><label class="field-label" for="random-seed">Seed</label><div class="input-group"><input id="random-seed" type="number" min="0" max="4294967295" value="193"><button id="shuffle-seed" class="icon-only" aria-label="New random seed" title="New random seed"><svg class="icon"><use href="#i-dice"/></svg></button></div></div>
 
-    <button id="generate-button" class="primary block generate" disabled>Generate</button>
-    <p id="construction-note" class="hint centered"></p>
+    <div class="generate-row">
+      <div id="h-field" class="field"><label class="field-label" for="semi-edge">Lattice semi-edge <i>h</i></label><input id="semi-edge" type="number" min="1" max="12" value="6"></div>
+      <div id="count-field" class="field" hidden><label class="field-label" for="target-count" id="target-label">Requested count</label><input id="target-count" type="number" min="32" max="1000000" step="1" value="1000"></div>
+      <button id="generate-button" class="primary" disabled>Generate</button>
+    </div>
+    <p id="construction-note" class="hint"></p>
   </section>
 
-  <section class="section">
-    <header class="section-head"><h2>Relax</h2><span class="meta">step <b id="iteration-count">0</b></span></header>
-
+  <section id="optimize-panel" class="section" role="tabpanel" aria-labelledby="tab-optimize" hidden>
     <fieldset id="objective" class="field">
       <legend class="field-label">Objective</legend>
       <div class="segmented">
-        <label title="Quey geodesic pair repulsion"><input type="radio" name="objective" value="repulsion" checked><span>Repulsion</span></label>
-        <label title="Lower the covering radius with local GPU moves"><input type="radio" name="objective" value="covering"><span>Covering</span></label>
+        <label title="Pair repulsion 1/d + 1/(π − d), where d is the geodesic distance on S³. Symmetry images and antipodes are included. Barzilai–Borwein steps with curvature scaling."><input type="radio" name="objective" value="repulsion" checked><span>Repulsion</span></label>
+        <label title="Moves disjoint groups of points around the largest empty caps and keeps a move only if the exact local maximum drops. Small kicks leave plateaus, and the best sample found is kept. Separation is not constrained unless a floor is set, and usually falls."><input type="radio" name="objective" value="covering"><span>Covering</span></label>
+        <label title="Repulsion until its energy plateaus, then covering until several kicked descents in a row find nothing better. Steps limits each stage."><input type="radio" name="objective" value="auto"><span>Auto</span></label>
       </div>
     </fieldset>
+
+    <div class="field">
+      <label class="field-label spread" for="iterations">Steps<span class="meta">step <b id="iteration-count">0</b></span></label>
+      <div class="run-row">
+        <input id="iterations" type="number" min="1" value="100">
+        <button id="relax-button" class="primary" disabled><svg class="icon"><use href="#i-play"/></svg>Go</button>
+        <button id="stop-button" class="danger" disabled><svg class="icon"><use href="#i-stop"/></svg>Stop</button>
+      </div>
+      <div id="run-progress" class="progress" hidden><i id="run-progress-bar"></i></div>
+    </div>
+
+    <div class="switches pair">
+      <label class="switch" title="Include the identity orientation in the sample"><input id="add-identity" type="checkbox"><span class="track"></span>Identity</label>
+      <label class="switch" title="Include the identity and hold it fixed during optimization"><input id="fix-identity" type="checkbox"><span class="track"></span>Fix identity</label>
+    </div>
 
     <fieldset id="forces" class="field">
       <legend class="field-label">Forces</legend>
       <div class="segmented">
         <label title="Near field above 20,000 orientations, all pairs below"><input type="radio" name="forces" value="auto" checked><span>Auto</span></label>
         <label title="Every orbit point (cost grows with the square of the count)"><input type="radio" name="forces" value="all"><span>All pairs</span></label>
-        <label title="Orbit points within 20 mean orientation radii, about 7,500 per point (Quey et al. 2018); cost grows linearly"><input type="radio" name="forces" value="near"><span>Near field</span></label>
+        <label title="Orbit points within 20 mean orientation radii, about 7,500 per point (Quey et al. 2018), fading smoothly over the outer half. Cost grows linearly and the energy is the near-field sum; differences in density at larger scales even out more slowly than with all pairs."><input type="radio" name="forces" value="near"><span>Near field</span></label>
       </div>
     </fieldset>
 
@@ -123,34 +140,17 @@
       </div>
     </fieldset>
 
-    <div id="floor-field" class="field" hidden>
+    <div id="floor-field" class="field" hidden title="Local steps keep every pair of orientations at least this far apart.">
       <label class="field-label" for="separation-floor">Min separation (°)</label>
-      <div class="input-group"><input id="separation-floor" type="number" min="0" max="179" step="0.01" placeholder="None"><button id="floor-from-current" type="button" title="Set the floor to 95% of the current separation">95% of current</button></div>
-      <p class="hint">Local steps keep every pair of orientations at least this far apart.</p>
+      <div class="input-group"><input id="separation-floor" type="number" min="0" max="179" step="0.01" placeholder="None"><button id="floor-from-current" type="button" title="Set the floor to 99% of the current separation">99% of current</button></div>
     </div>
 
-    <div class="field">
-      <label class="field-label" for="iterations" id="iterations-label">Iterations</label>
-      <div class="run-row">
-        <input id="iterations" type="number" min="1" max="1000" value="30">
-        <button id="relax-button" class="primary" disabled><svg class="icon"><use href="#i-play"/></svg><span id="relax-label">Relax</span></button>
-        <button id="stop-button" class="danger" disabled><svg class="icon"><use href="#i-stop"/></svg>Stop</button>
-      </div>
-      <div id="run-progress" class="progress" hidden><i id="run-progress-bar"></i></div>
-    </div>
-
-    <div class="switches">
-      <label class="switch"><input id="add-identity" type="checkbox"><span class="track"></span>Include identity</label>
-      <label class="switch"><input id="fix-identity" type="checkbox"><span class="track"></span>Hold identity fixed</label>
+    <div id="keep-field" class="field" hidden title="The covering stage keeps every pair of orientations at least this share of the separation repulsion reached.">
+      <label class="field-label" for="keep-separation">Keep separation (%)</label>
+      <input id="keep-separation" type="number" min="0" max="100" step="0.5" value="99">
     </div>
 
     <button id="restore-button" class="ghost block" disabled><svg class="icon"><use href="#i-undo"/></svg>Restore original</button>
-
-    <details class="disclosure"><summary>About the objective</summary>
-      <p class="hint" data-objective="repulsion">Pair repulsion 1/<i>d</i> + 1/(π − <i>d</i>), where <i>d</i> is the geodesic distance on S³. Symmetry images and antipodes are included. Barzilai–Borwein steps with curvature scaling.</p>
-      <p class="hint" data-objective="repulsion">Near field sums only the orbit points within 20 mean orientation radii, fading smoothly over the outer half, so a step costs time linear in the count. Its energy is the near-field sum. Differences in density at larger scales even out more slowly than with all pairs.</p>
-      <p class="hint" data-objective="covering" hidden>Moves disjoint groups of points around the largest empty caps and keeps a move only if the exact local maximum drops. Small kicks leave plateaus, and the best sample found is kept. Separation is not constrained and usually falls.</p>
-    </details>
   </section>
 
 </aside>

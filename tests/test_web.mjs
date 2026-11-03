@@ -162,6 +162,41 @@ try {
   check("the transport construction generates the FCC grid at h=6", transport.shown && transport.count === "1,043", transport.count);
   check("D4 uses the inverse Hopf grid nearest 1,000", transport.hidden && transport.dihedral === "978", transport.dihedral);
 
+  const identity = await evaluate(`${helpers}
+    pick("group", "D3");
+    $("generate-button").click();
+    await idle();
+    const base = $("point-count").textContent;
+    $("add-identity").click();
+    await idle();
+    const added = $("point-count").textContent;
+    $("fix-identity").click();
+    await idle();
+    $("add-identity").click();
+    await idle();
+    const removed = $("point-count").textContent, fixed = $("fix-identity").checked;
+    pick("group", "O");
+    return { base, added, removed, fixed, errors: errors() };`);
+  check("the identity toggle adds and removes the point at once", identity.added === String(+identity.base.replace(",", "") + 1).replace(/(\d)(\d{3})$/, "$1,$2") && identity.removed === identity.base && !identity.fixed,
+    `${identity.base} → ${identity.added} → ${identity.removed}`);
+
+  const auto = await evaluate(`${helpers}
+    $("target-count").value = "300";
+    $("generate-button").click();
+    await idle();
+    pick("objective", "auto");
+    const steps = +$("iterations").value;
+    $("relax-button").click();
+    await idle();
+    const lines = log();
+    pick("objective", "repulsion");
+    $("target-count").value = "1000";
+    return { steps, kept: num("separation"), relaxed: lines.filter((l) => l.includes("Measured")).at(-2) || "", line: lines.filter((l) => l.includes("Covering optimization")).pop() || "", errors: errors() };`);
+  const taken = +(/Covering optimization ([\d,]+) steps/.exec(auto.line)?.[1] || "0").replace(",", "");
+  check("Auto runs both stages and stops the covering stage at a plateau", taken > 0 && taken < auto.steps && !auto.errors.length, auto.line);
+  const floor = +(/separation floor ([\d.]+)°/.exec(auto.line)?.[1] || "NaN");
+  check("Auto keeps 99% of the separation repulsion reached", auto.kept >= floor * (1 - 1e-4), `${auto.kept}° against a floor of ${floor}°`);
+
   const near = await evaluate(`${helpers}
     pick("count-mode", "random");
     $("target-count").value = "25000";

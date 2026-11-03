@@ -287,8 +287,9 @@ class Grid:
 
         min_separation_deg keeps every pair of orientations at least that SO(3)
         angle apart in local steps; pairs already nearer are never brought
-        nearer. Full-pass steps (local=False, or the automatic fallback for
-        lattice-like samples) do not enforce it.
+        nearer. Kicks and full-pass steps (local=False, or the automatic fallback
+        for lattice-like samples) can break it, so the sample kept is one whose
+        measured separation holds it.
         """
         self._open()
         modes = {"tet": 0, "face": 1}

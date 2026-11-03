@@ -86,6 +86,7 @@ pub const Engine = struct {
         self.g.release(&self.trust_gpu);
         self.g.release(&self.opt.best);
         self.g.release(&self.opt.start);
+        self.g.release(&self.opt.candidate);
         self.opt.live.release(&self.g);
         self.g.release(&self.q);
         self.g.release(&self.ops);
@@ -368,9 +369,10 @@ pub const Engine = struct {
             // A new run, or the sample moved since (relaxation, import, identity).
             g.ensure(&self.opt.best, bytes);
             g.ensure(&self.opt.start, bytes);
+            g.ensure(&self.opt.candidate, bytes);
             try self.endLive();
             g.copy(self.q, 0, self.opt.best, 0, bytes);
-            self.opt = .{ .best = self.opt.best, .start = self.opt.start, .active = true };
+            self.opt = .{ .best = self.opt.best, .start = self.opt.start, .candidate = self.opt.candidate, .active = true };
             self.trust_n = 0;
         }
         self.cancelled.store(false, .release);
@@ -386,9 +388,16 @@ pub const Engine = struct {
             } else if (mode & 4 == 0 and result[0] > 0 and 2 * result[2] > result[0]) self.opt.fallback = cover_fallback_steps;
             // The step measured `start` exactly before moving it.
             const radius = self.cover_result.?.radius_deg;
-            if (radius < self.opt.best_radius) {
-                self.opt.best_radius = radius;
-                g.copy(self.opt.start, 0, self.opt.best, 0, bytes);
+            // Local steps hold the floor, but a kick breaks it and full passes ignore it: once
+            // either has happened, a descent's lowest sample is checked before it can be the best.
+            if (floor == 0 or (self.opt.kicks == 0 and self.opt.full_steps == 0)) {
+                if (radius < self.opt.best_radius) {
+                    self.opt.best_radius = radius;
+                    g.copy(self.opt.start, 0, self.opt.best, 0, bytes);
+                }
+            } else if (radius < self.opt.candidate_radius) {
+                self.opt.candidate_radius = radius;
+                g.copy(self.opt.start, 0, self.opt.candidate, 0, bytes);
             }
             // A descent has plateaued after cover_patience steps without a
             // relative gain of cover_progress; creeping gains do not count.
@@ -402,6 +411,7 @@ pub const Engine = struct {
             if (self.opt.stall >= cover_patience) {
                 // Every source moves: the live pass is built again from the kicked sample.
                 try self.endLive();
+                try self.settleCandidate(floor_deg);
                 g.copy(self.opt.best, 0, self.q, 0, bytes);
                 const rho: f32 = @floatCast(self.opt.best_radius * std.math.pi / 360);
                 // Every source is kicked: at a plateau the caps within 1% of the largest
@@ -418,6 +428,7 @@ pub const Engine = struct {
         self.cancelled.store(false, .release);
         if (finish) {
             try self.endLive();
+            try self.settleCandidate(floor_deg);
             g.copy(self.opt.best, 0, self.q, 0, bytes);
             // The best sample may be from a live stretch, unfolded as q was then.
             try self.fold(self.q, self.n);
@@ -447,6 +458,17 @@ pub const Engine = struct {
             self.opt.energy_ms = self.opt.energy_at - now;
         }
         self.opt.iteration = self.iteration;
+    }
+    /// The descent's lowest sample becomes the best if it beats it and holds the floor.
+    fn settleCandidate(self: *Engine, floor_deg: f32) !void {
+        const radius = self.opt.candidate_radius;
+        self.opt.candidate_radius = std.math.inf(f64);
+        if (!(radius < self.opt.best_radius)) return;
+        self.syncNeighbourhood();
+        const m = try self.relax_state.measure(self.allocator, &self.g, self.opt.candidate, self.n, self.ops, @intCast(groups.operations(self.group).len), null);
+        if (m.separation_deg < floor_deg * (1 - 5e-6)) return;
+        self.opt.best_radius = radius;
+        self.g.copy(self.opt.candidate, 0, self.opt.best, 0, @as(u64, self.n) * 16);
     }
     /// One per-source local.wgsl kernel over q and the trust radii.
     fn localPass(self: *Engine, key: []const u8, entry: []const u8, value: f32, seed: u32) !void {
@@ -982,6 +1004,9 @@ fn lessKey(a: [4]u32, b: [4]u32) bool {
 const CoverOpt = struct {
     best: gpu.Buf = .{},
     start: gpu.Buf = .{},
+    /// The current descent's lowest sample, while the best must be checked against a floor.
+    candidate: gpu.Buf = .{},
+    candidate_radius: f64 = std.math.inf(f64),
     best_radius: f64 = std.math.inf(f64),
     /// Lowest radius of the current descent; the stall count measures progress
     /// against it, so each kicked sample is compacted to its own plateau.
