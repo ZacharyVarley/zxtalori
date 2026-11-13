@@ -74,7 +74,7 @@ not part of this repository (see `tests/fixtures/README.md`).
 
 ```powershell
 python scripts/build_wheels.py win_amd64
-python -m pip install dist/zxtalori-0.2.2-py3-none-win_amd64.whl
+python -m pip install dist/zxtalori-0.3.0-py3-none-win_amd64.whl
 python -m zxtalori
 ```
 
