@@ -115,12 +115,16 @@ const helpers = `
 
 try {
   const ready = await evaluate(`${helpers}
-    // the page may not have loaded yet; it generates a sample and checks its covering itself
-    for (let i = 0; i < 3000 && !(($("gpu-badge")?.dataset.state === "ready" && $("generate-button") && !$("generate-button").disabled) || $("gpu-badge")?.dataset.state === "error"); i++) await sleep(100);
+    // the page may not have loaded yet; it generates a sample and checks its covering itself.
+    // A file that fails to load (a module left out of the site) stops the app before it starts.
+    const missing = () => performance.getEntriesByType("resource").filter((e) => e.responseStatus >= 400 && /\.(js|css|wasm|html)$/.test(new URL(e.name).pathname)).map((e) => e.name);
+    for (let i = 0; i < 3000 && !missing().length && !(($("gpu-badge")?.dataset.state === "ready" && $("generate-button") && !$("generate-button").disabled) || $("gpu-badge")?.dataset.state === "error"); i++) await sleep(100);
+    if (missing().length) return { missing: missing() };
     await idle();
     for (let i = 0; i < 1200 && $("covering-radius").textContent === "—" && !errors().length; i++) await sleep(100);
     return { gpu: $("gpu-badge").dataset.state, adapter: $("gpu-badge").textContent, count: $("sample-badge").textContent.split(" ")[0],
              separation: num("separation"), covering: num("covering-radius"), errors: errors() };`);
+  if (ready.missing) throw new Error("the site is missing files: " + ready.missing.join(", "));
   check("the app starts on WebGPU", ready.gpu === "ready", ready.adapter);
   if (ready.gpu !== "ready") throw new Error("no WebGPU: " + ready.adapter);
   check("the startup sample is the O inverse Hopf grid nearest 1,000", ready.count === "1,048", ready.count);
