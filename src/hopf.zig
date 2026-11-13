@@ -10,15 +10,17 @@
 //! and every stabilizer order divides n, so N_FZ = n |V| / |K| with no orientation twice.
 //! Every other group H inherits a root P: with R H R^-1 inside P, one q c R per H-orbit is kept
 //! (c over the cosets), and the H-extended set is the P-extended set rotated by R.
-//! The base mesh is small (|V| is about 4 f^2 to 10 f^2); all of it runs in f64 here.
+//! The base mesh is small (|V| is about 4 f^2 to 10 f^2); all of it runs in f64 here. Each
+//! point is one product R_z(t) (s c R) of a tabulated spin and a per-orbit factor, rounded
+//! once to f32; the engine then folds the points into the zone on the GPU.
 const std = @import("std");
 const gpu = @import("gpu/gpu.zig");
 const groups = @import("groups.zig");
 const pi: f64 = std.math.pi;
 
 pub const Result = struct { quats: gpu.Buf, count: u32 };
-pub const max_frequency: u32 = 256;
-pub const max_count: u64 = 1000000;
+pub const max_frequency: u32 = 512;
+pub const max_count: u64 = 10000000;
 const Q = [4]f64;
 const V = [3]f64;
 const M = [3][3]f64;
@@ -512,7 +514,8 @@ fn better(a: V, b: V) bool {
     return @round(a[1] * 1e11) > @round(b[1] * 1e11);
 }
 
-/// Zone points of the frequency-f grid, scalar first, as f32 rows.
+/// Points of the frequency-f grid, scalar first, as f32 rows; each is one orbit image and
+/// the caller folds them into the zone.
 pub fn points(allocator: std.mem.Allocator, group: groups.Group, f: u32) ![][4]f32 {
     const total = try count(group, f);
     const root = rootOf(group);
@@ -553,6 +556,16 @@ pub fn points(allocator: std.mem.Allocator, group: groups.Group, f: u32) ![][4]f
     @memset(seen, false);
     const n = fibreCount(root, f);
     const sector = Sector.init(root);
+    // The fibre rotations R_z(t) of both phases: odd layers are half a spin step on.
+    const spins = try allocator.alloc(Q, 2 * @as(usize, n));
+    defer allocator.free(spins);
+    for (0..2) |phase| for (0..n) |j| {
+        const t = (2 * pi * @as(f64, @floatFromInt(j)) + pi * @as(f64, @floatFromInt(phase))) / @as(f64, @floatFromInt(n));
+        spins[phase * n + j] = .{ @cos(0.5 * t), 0, 0, @sin(0.5 * t) };
+    };
+    // q c R = R_z(t) (s c R): the cosets' products with R, then with s once per orbit.
+    var tails: [60]Q = undefined;
+    for (cosets[0..n_cosets], 0..) |c, k| tails[k] = mul(c, r);
     const out = try allocator.alloc([4]f32, total);
     errdefer allocator.free(out);
     var at: usize = 0;
@@ -578,29 +591,15 @@ pub fn points(allocator: std.mem.Allocator, group: groups.Group, f: u32) ![][4]f
         }
         if (n % stabilizer != 0) return error.FibreNotDivisible;
         const s = section(representative orelse return error.OrbitOutsideSector);
-        // Odd layers: half a spin step.
-        const phase = pi * @as(f64, @floatFromInt(base.layers[i] % 2));
-        for (0..n / stabilizer) |j| {
-            const t = (2 * pi * @as(f64, @floatFromInt(j)) + phase) / @as(f64, @floatFromInt(n));
-            const q = normalize4(mul(.{ @cos(0.5 * t), 0, 0, @sin(0.5 * t) }, s));
-            for (cosets[0..n_cosets]) |c| {
-                const inherited = mul(mul(q, c), r);
-                // The zone representative: of the q g, the one nearest the identity.
-                var best = inherited;
-                var best_w: f64 = -2;
-                for (elements) |g| {
-                    var candidate = mul(inherited, g);
-                    if (candidate[0] < 0) candidate = .{ -candidate[0], -candidate[1], -candidate[2], -candidate[3] };
-                    if (candidate[0] > best_w) {
-                        best = candidate;
-                        best_w = candidate[0];
-                    }
-                }
-                if (at == total) return error.ProductCount;
-                out[at] = .{ @floatCast(best[0]), @floatCast(best[1]), @floatCast(best[2]), @floatCast(best[3]) };
-                at += 1;
-            }
-        }
+        var heads: [60]Q = undefined;
+        for (tails[0..n_cosets], 0..) |t, k| heads[k] = mul(s, t);
+        const row = spins[(base.layers[i] % 2) * n ..][0 .. n / stabilizer];
+        if (at + row.len * n_cosets > total) return error.ProductCount;
+        for (row) |spin| for (heads[0..n_cosets]) |h| {
+            const image = mul(spin, h);
+            out[at] = .{ @floatCast(image[0]), @floatCast(image[1]), @floatCast(image[2]), @floatCast(image[3]) };
+            at += 1;
+        };
     }
     if (at != total) return error.ProductCount;
     return out;

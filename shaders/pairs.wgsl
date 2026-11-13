@@ -425,3 +425,10 @@ fn near_reduce(@builtin(global_invocation_id) gid:vec3<u32>){
     }
     extra.z=nearest;final_rows[bitcast<u32>(near_sources[near.first+k].w)]=Row(vec4<f32>(0.0),extra,force);
 }
+// Each source's nearest orbit point as an SO(3) angle in degrees, from its force row.
+@group(0) @binding(12) var<storage,read_write> nearest_out:array<f32>;
+@compute @workgroup_size(256)
+fn nearest_degrees(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){
+    let i=id_grid.x+id_grid.y*id_groups.x*256u;if(i>=p.n){return;}
+    nearest_out[i]=4.0*asin(min(1.0,sqrt(rows[i].extra.z)*0.5))*(180.0/PI);
+}

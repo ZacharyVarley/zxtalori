@@ -97,3 +97,33 @@ fn verify_probes(@builtin(global_invocation_id) id:vec3<u32>){
     for b in buffers.values():
         b.destroy()
     device.destroy()
+
+
+# groups.chartReach: the zone's largest chart-0 coordinate, or None where it leaves chart 0.
+CHART_REACH = {'C2': None, 'C3': None, 'C4': None, 'C6': None, 'D3': None,
+               'D2': 1, 'D4': 1, 'D6': 1, 'T': 1, 'O': 0.414214, 'I': 0.401623}
+
+
+@pytest.mark.parametrize('group', OPS)
+def test_chart_reach_bounds_the_zone(group):
+    from scipy.optimize import linprog
+    ops = np.asarray(OPS[group], np.float32).astype(float)
+    # covering.zonePlanes: the bisectors of the identity and every other signed frame.
+    normals = np.concatenate([np.array([[1., 0, 0, 0]])-ops[1:], np.array([[1., 0, 0, 0]])+ops])
+    normals /= np.linalg.norm(normals, axis=1, keepdims=True)
+    # In chart 0, q = (1, x): the zone is the polytope normals @ (1, x) >= 0.
+    reach = 0.0
+    for k in range(3):
+        for sign in (1, -1):
+            cost = np.zeros(3)
+            cost[k] = -sign
+            result = linprog(cost, A_ub=-normals[:, 1:], b_ub=normals[:, 0], bounds=[(None, None)]*3, method='highs')
+            if result.status == 3:
+                assert CHART_REACH[group] is None or 1 < CHART_REACH[group]
+                return
+            assert result.status == 0
+            reach = max(reach, -result.fun)
+    if reach > 1:
+        assert CHART_REACH[group] is None
+    else:
+        assert CHART_REACH[group] is not None and reach <= CHART_REACH[group] < reach + 1e-5

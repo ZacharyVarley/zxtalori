@@ -81,7 +81,7 @@ def test_counts_and_selection(group):
         with zxtalori.generate(group, h=f) as grid:
             assert len(grid) == count(group, f) and grid.stats["h"] == f
     # With no frequency, the count nearest the request by ratio.
-    sizes = {f: count(group, f) for f in range(1, 257) if count(group, f) <= 1_000_000}
+    sizes = {f: count(group, f) for f in range(1, 513) if count(group, f) <= 10_000_000}
     for target in (500, 2048):
         with zxtalori.generate(group, count=target) as grid:
             assert grid.stats["grid"] == "hopf"
@@ -105,3 +105,12 @@ def test_transport_is_polyhedral_only():
         zxtalori.generate("D4", kind="transport")
     with pytest.raises(ValueError):
         zxtalori.generate("O", kind="lattice")
+
+
+def test_ten_million():
+    # Near the count limit, in the zone and nearest to the request.
+    with zxtalori.generate("O", count=10_000_000) as grid:
+        q = grid.quaternions
+        assert grid.stats["h"] == 281 and len(grid) == count("O", 281)
+        assert np.all(q[:, 0] >= -1e-6) and np.abs(np.linalg.norm(q, axis=1) - 1).max() < 1e-5
+        assert grid.spacing()["separation_deg"] > 0.3

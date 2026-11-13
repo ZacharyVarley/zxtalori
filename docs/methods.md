@@ -33,8 +33,12 @@ H-extended set is the P-extended set rotated by R, so every measure of it is the
 parent's. N_FZ grows by |P| / |H|. The rotations R come from
 `so3k.product.embedding`, tabulated in `src/hopf.zig`.
 
-The whole construction is f64 on the host, O(N |K|) with no iteration, and
-nothing is cut or deduplicated. Counts jump with f and are not monotonic for the
+The construction is f64 on the host, with no iteration, and nothing is cut or
+deduplicated: the fibre rotations are tabulated once per phase and each orbit's
+factor s c R once, so each point is a single quaternion product rounded to f32.
+The points are orbit images, and the engine's GPU fold (the one imports use)
+takes each to its zone representative. Ten million orientations take about a
+second. Counts jump with f and are not monotonic for the
 octahedral root (f=13 gives 1,130 points for O, f=14 gives 1,048). A requested
 count takes the frequency nearest it by ratio. All eleven groups match the
 reference row for row, up to the zone image of boundary points, to 5e-8 in
@@ -85,6 +89,13 @@ The tested 200-value logarithm diagnostic has max absolute error 1.14e-13;
 the end-to-end normalized log index agrees with dense f64 to better than 1e-9
 on the checked roughly 1k-point generated/random cases. These are measured
 results, not a portable f64 guarantee.
+
+Each orientation's nearest orbit neighbour (`spacing()`, the display's local
+spacing) runs the near-field pass of the relaxation below within four mean
+orientation radii, all pairs below 20,000 orientations, and reads back one
+value per point: linear in N, about 0.06 s for a million. In a uniform sample a
+point has no neighbour within four mean radii with probability about e^-64; on
+a random sample of 60,000 the values match all pairs to 5e-7 degrees.
 
 ## Quey relaxation
 
@@ -185,10 +196,19 @@ without a relative gain of 5e-4. The best sample is then restored, every free
 source receives an isotropic left kick of RMS angle 0.04 rho, and trust radii
 restart at 0.03 rho. The engine keeps the best sample on the GPU and leaves it
 in place when a run finishes or stops. The constants were measured on O/T/I at
-roughly 1,000 FZ orientations.
+roughly 1,000 FZ orientations; `optimize_covering(patience=, plateau_gain=, kick=,
+kick_trust=)` and the app's Plateau kicks change them.
 
 Covering optimization lowers minimum separation unless a separation floor
 is set.
+
+A run measures only the covering radius: between batches from the live
+triangulation, and at the end with a full pass. Energy and separation are pair
+sums over the whole orbit, growing as N^2 (about 1.6 s on an I grid of 49k,
+minutes at 500k, where they had made a short run take minutes), so the run
+leaves them stale (`measures_current` false) until `measure()`; the app measures
+them after a run up to 10,000 orientations, and above that its spacing pass.
+A separation floor still measures the descent's lowest sample before keeping it.
 
 The app runs optimization in batches of about 300 ms of GPU wait time and
 queues the next batch before drawing the finished one, so the engine is never
@@ -202,7 +222,12 @@ oracle and checks the local maxima against full passes.
 
 ## Scope
 
-The present work targets 1k–10k representatives. Exact-count augmentation and
+Kernels whose threads grow with N (per point, per tetrahedron, per orbit
+image) index a two-dimensional grid of workgroups, since WebGPU allows at most
+65,535 in each dimension; a dispatch that would still exceed it fails the
+operation instead of being skipped. Generation, spacing and drawing run to 10
+million orientations; covering checks to about a million. The optimizers
+target 1k–10k representatives. Exact-count augmentation and
 covering checks use the parallel WGSL triangulator described in
 [gpu-delaunay.md](gpu-delaunay.md). CPU implementations are development
 oracles. Larger-scale covering optimization remains future work. KeOps is a

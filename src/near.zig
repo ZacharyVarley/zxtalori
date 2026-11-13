@@ -47,6 +47,7 @@ pub const Near = struct {
     halfspaces: gpu.Buf = .{},
     info: gpu.Buf = .{},
     blocks: gpu.Buf = .{},
+    rim: gpu.Buf = .{},
     sites: gpu.Buf = .{},
     origin: gpu.Buf = .{},
     sorted_sites: gpu.Buf = .{},
@@ -69,7 +70,7 @@ pub const Near = struct {
     status: [2]u32 = @splat(0),
 
     pub fn release(self: *Near, g: *gpu.Gpu) void {
-        for ([_]*gpu.Buf{ &self.halfspaces, &self.info, &self.blocks, &self.sites, &self.origin, &self.sorted_sites, &self.images, &self.codes, &self.site_offsets, &self.site_cursors, &self.points, &self.sorted_sources, &self.source_offsets, &self.source_cursors, &self.partial }) |b| g.release(b);
+        for ([_]*gpu.Buf{ &self.halfspaces, &self.info, &self.blocks, &self.rim, &self.sites, &self.origin, &self.sorted_sites, &self.images, &self.codes, &self.site_offsets, &self.site_cursors, &self.points, &self.sorted_sources, &self.source_offsets, &self.source_cursors, &self.partial }) |b| g.release(b);
         self.* = .{ .a = self.a, .group = self.group, .delta = self.delta, .taper = self.taper };
     }
 
@@ -81,9 +82,8 @@ pub const Near = struct {
         const params = ShellParams{ .n = self.n, .capacity = self.capacity, .order = self.order, .planes = self.planes, .config = .{ @floatCast(@sin(self.radius + 1e-4)), 0, 0, 0 } };
         const shape = gpu.Gpu.flat((self.n * self.order * 2 + 127) / 128);
         g.ensure(&self.blocks, @as(u64, shape[0]) * shape[1] * 8);
-        g.dispatch(try g.pipeline("cover/shell_count", shaders.shell, "shell_count"), shape[0], shape[1], 1, &.{ g.uniform(0, std.mem.asBytes(&params)), self.halfspaces.at(11), ops.at(12), q.at(15), self.blocks.at(17) });
-        g.dispatch(try g.pipeline("cover/shell_scan", shaders.shell, "shell_scan"), 1, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), self.info.at(14), self.blocks.at(17) });
-        g.dispatch(try g.pipeline("cover/shell", shaders.shell, "shell_build"), shape[0], shape[1], 1, &.{ g.uniform(0, std.mem.asBytes(&params)), self.sites.at(1), self.halfspaces.at(11), ops.at(12), self.info.at(14), q.at(15), self.origin.at(16), self.blocks.at(17) });
+        g.ensure(&self.rim, covering.rimBytes(self.n));
+        try covering.shellPass(g, std.mem.asBytes(&params), self.n, .{ .sites = self.sites, .halfspaces = self.halfspaces, .ops = ops, .info = self.info, .core = q, .origin = self.origin, .blocks = self.blocks, .rim = self.rim });
     }
 
     /// Sizes the buffers and the chart box from one shell pass (one wait).
@@ -107,8 +107,7 @@ pub const Near = struct {
             g.ensure(&self.origin, @as(u64, capacity) * 4);
             try self.shell(g, q, ops);
             g.read(self.info, 0, std.mem.asBytes(&state));
-            g.submit();
-            try g.dev.wait();
+            try g.wait();
             if (g.dev.takeError() != null) return error.GpuValidation;
             if (state[1] == 0) break;
             capacity = @max(capacity * 2, state[0] + state[0] / 4);
@@ -154,11 +153,11 @@ pub const Near = struct {
 
     fn sort(g: *gpu.Gpu, params: SortParams, input: gpu.Buf, info: gpu.Buf, offsets: gpu.Buf, cursors: gpu.Buf, sorted: gpu.Buf, items: u32) !void {
         const cells = params.dim * params.dim * params.dim;
-        g.dispatch(try g.pipeline("near/clear", shaders.near, "near_clear"), (cells + 128) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), offsets.at(2) });
-        g.dispatch(try g.pipeline("near/count", shaders.near, "near_count"), (items + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), input.at(1), offsets.at(2), info.at(5) });
+        g.dispatchFlat(try g.pipeline("near/clear", shaders.near, "near_clear"), (cells + 128) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), offsets.at(2) });
+        g.dispatchFlat(try g.pipeline("near/count", shaders.near, "near_count"), (items + 127) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), input.at(1), offsets.at(2), info.at(5) });
         g.dispatch(try g.pipeline("near/prefix", shaders.near, "near_prefix"), 1, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), offsets.at(2), cursors.at(4) });
-        g.dispatch(try g.pipeline("near/scatter", shaders.near, "near_scatter"), (items + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), input.at(1), sorted.at(3), cursors.at(4), info.at(5) });
-        g.dispatch(try g.pipeline("near/order", shaders.near, "near_order"), (cells + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), offsets.at(2), sorted.at(3) });
+        g.dispatchFlat(try g.pipeline("near/scatter", shaders.near, "near_scatter"), (items + 127) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), input.at(1), sorted.at(3), cursors.at(4), info.at(5) });
+        g.dispatchFlat(try g.pipeline("near/order", shaders.near, "near_order"), (cells + 127) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), offsets.at(2), sorted.at(3) });
     }
 
     /// Records the near-field force rows of the sources `q` into `rows` (one Row each), as
@@ -170,9 +169,9 @@ pub const Near = struct {
         const tbox = [4]f32{ self.lower[0], self.lower[1], self.lower[2], tdim / self.width };
         try sort(g, .{ .count = 0, .capacity = self.capacity, .dim = self.sdim, .flags = 1, .lower = box }, self.sites, self.info, self.site_offsets, self.site_cursors, self.sorted_sites, self.capacity);
         const image_params = [4]u32{ n, self.capacity, 0, 0 };
-        g.dispatch(try g.pipeline("near/images", shaders.near, "near_images"), (self.capacity + 127) / 128, 1, 1, &.{ g.uniform(8, std.mem.asBytes(&image_params)), self.sorted_sites.at(3), self.info.at(5), q.at(6), ops.at(9), self.origin.at(10), self.images.at(11), self.codes.at(12) });
+        g.dispatchFlat(try g.pipeline("near/images", shaders.near, "near_images"), (self.capacity + 127) / 128, 1, &.{ g.uniform(8, std.mem.asBytes(&image_params)), self.sorted_sites.at(3), self.info.at(5), q.at(6), ops.at(9), self.origin.at(10), self.images.at(11), self.codes.at(12) });
         const source_params = SortParams{ .count = n, .capacity = n, .dim = tdim, .flags = 2, .lower = tbox };
-        g.dispatch(try g.pipeline("near/points", shaders.near, "near_points"), (n + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&source_params)), q.at(6), self.points.at(7) });
+        g.dispatchFlat(try g.pipeline("near/points", shaders.near, "near_points"), (n + 127) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(&source_params)), q.at(6), self.points.at(7) });
         try sort(g, source_params, self.points, self.info, self.source_offsets, self.source_cursors, self.sorted_sources, n);
         const chord = 2 * @sin(self.radius / 2);
         const pair_params = [8]u32{ n, order, 0, 0, 0, 0, 0, 0 };

@@ -29,13 +29,13 @@ fn cell_of(x:vec3<f32>)->u32{
 }
 // Each source's stereographic position, its index in w (as the shell build places it).
 @compute @workgroup_size(128)
-fn near_points(@builtin(global_invocation_id) id:vec3<u32>){
+fn near_points(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u,0u,0u);
     let i=id.x;if(i>=u.count){return;}let q=quats[i];points[i]=vec4<f32>(q.yzw/(1.0+q.x),bitcast<f32>(i));
 }
 @compute @workgroup_size(128)
-fn near_clear(@builtin(global_invocation_id) id:vec3<u32>){if(id.x<=u.dim*u.dim*u.dim){atomicStore(&offsets[id.x],0u);}}
+fn near_clear(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u,0u,0u);if(id.x<=u.dim*u.dim*u.dim){atomicStore(&offsets[id.x],0u);}}
 @compute @workgroup_size(128)
-fn near_count(@builtin(global_invocation_id) id:vec3<u32>){if(id.x<items()){atomicAdd(&offsets[cell_of(input[id.x].xyz)],1u);}}
+fn near_count(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u,0u,0u);if(id.x<items()){atomicAdd(&offsets[cell_of(input[id.x].xyz)],1u);}}
 var<workgroup> prefix:array<u32,256>;
 var<workgroup> total:u32;
 // One workgroup: counts become exclusive offsets (and the scatter cursors).
@@ -52,7 +52,7 @@ fn near_prefix(@builtin(local_invocation_index) lane:u32){
 }
 // The point's index goes in w.
 @compute @workgroup_size(128)
-fn near_scatter(@builtin(global_invocation_id) id:vec3<u32>){
+fn near_scatter(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u,0u,0u);
     if(id.x>=items()){return;}let x=input[id.x];
     sorted[atomicAdd(&cursors[cell_of(x.xyz)],1u)]=vec4<f32>(x.xyz,bitcast<f32>(id.x));
 }
@@ -60,7 +60,7 @@ fn qmul(a:vec4<f32>,b:vec4<f32>)->vec4<f32>{return vec4<f32>(a.x*b.x-dot(a.yzw,b
 // The sorted sites' quaternions, rebuilt from their codes exactly as quey_partial builds
 // images, and sources, laid out in sorted order so near_force reads them in runs.
 @compute @workgroup_size(128)
-fn near_images(@builtin(global_invocation_id) id:vec3<u32>){
+fn near_images(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u,0u,0u);
     let k=id.x;if(k>=min(info[0],v.capacity)){return;}
     let code=origin[bitcast<u32>(sorted[k].w)];let source=code%v.n;let image=code/v.n;let op=image/2u;
     var q=select(normalize(qmul(quats[source],operators[op])),quats[source],op==0u);
@@ -70,7 +70,7 @@ fn near_images(@builtin(global_invocation_id) id:vec3<u32>){
 // Index order within each cell, so sums run in the same order every pass (crowded
 // cells, rare, keep the scatter's order).
 @compute @workgroup_size(128)
-fn near_order(@builtin(global_invocation_id) id:vec3<u32>){
+fn near_order(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u,0u,0u);
     if(id.x>=u.dim*u.dim*u.dim){return;}
     let begin=atomicLoad(&offsets[id.x]);let end=atomicLoad(&offsets[id.x+1u]);
     if(end-begin>128u){return;}

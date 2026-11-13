@@ -26,7 +26,7 @@ const HIGH=0x80000000u;
 // site, no star), origin its code, and each source lists its slots; unused slots are
 // free.
 @compute @workgroup_size(128)
-fn live_adopt(@builtin(global_invocation_id) id:vec3<u32>){
+fn live_adopt(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u,0u,0u);
     let slot=id.x;if(slot>=u.capacity){return;}
     if(slot>=u.total){
         coordinates[slot]=vec4<u32>(0u,0u,0u,NONE);origin[slot]=NONE;
@@ -46,7 +46,7 @@ fn live_release(@builtin(local_invocation_index) lane:u32){
 }
 // The moved sources, listed.
 @compute @workgroup_size(128)
-fn live_moved(@builtin(global_invocation_id) id:vec3<u32>){if(id.x<u.n&&moved[id.x]!=0u){atomicStore(&moved_list[1u+atomicAdd(&moved_list[0],1u)],id.x);}}
+fn live_moved(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u,0u,0u);if(id.x<u.n&&moved[id.x]!=0u){atomicStore(&moved_list[1u+atomicAdd(&moved_list[0],1u)],id.x);}}
 @compute @workgroup_size(1)
 fn live_launch_moved(){let count=atomicLoad(&moved_list[0]);launch[8]=min(count,32768u);launch[9]=max(1u,(count+32767u)/32768u);launch[10]=1u;}
 // Indirect sizes: words 0..2 one workgroup per pending star, words 4..6 one per change,
@@ -58,9 +58,9 @@ fn live_launch_changes(){let count=min(atomicLoad(&scratch[2]),u.capacity);launc
 // The jobs' shell grid (shaders/local.wgsl): heads per cell, next per slot, then each
 // slot's code; free slots are listed nowhere.
 @compute @workgroup_size(128)
-fn live_index_clear(@builtin(global_invocation_id) id:vec3<u32>){if(id.x<u.dim*u.dim*u.dim){atomicStore(&index[id.x],NONE);}}
+fn live_index_clear(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u,0u,0u);if(id.x<u.dim*u.dim*u.dim){atomicStore(&index[id.x],NONE);}}
 @compute @workgroup_size(128)
-fn live_index(@builtin(global_invocation_id) id:vec3<u32>){
+fn live_index(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u,0u,0u);
     let slot=id.x;if(slot>=u.capacity){return;}
     let cells=u.dim*u.dim*u.dim;let c=coordinates[slot];
     atomicStore(&index[cells+u.capacity+slot],select(origin[slot],NONE,c.w==NONE));

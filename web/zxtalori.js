@@ -360,6 +360,8 @@ export class Zxtalori {
     if(!this.handle) throw new Error('The orientation engine could not initialize.');
   }
   get info() {return this.state.info;}
+  /** The engine's WebGPU device, for drawing its samples. */
+  get device() {return this.state.device;}
   /** The pipelines this page compiled, as the warm-start list (pipelines.json) records them. */
   warmList() {return this.state.warm ? warmRecord(this.state.warm) : null;}
   /** Development profiling: per-kernel GPU time from timestamp queries (when the adapter
@@ -404,6 +406,8 @@ export class Zxtalori {
   mesh() {return this.enqueue(async()=>{await this.call('zo_mesh');const n=this.x.zo_mesh_vertex_count(this.handle),t=this.x.zo_mesh_tet_count(this.handle);return {vertices:new Float32Array(this.memory,this.x.zo_mesh_vertices(this.handle),n*4).slice(),tets:new Uint32Array(this.memory,this.x.zo_mesh_tets(this.handle),t*4).slice()};});}
   generateExact(group,count,{identity=false,kind=null}={}) {return this.enqueue(()=>this.call('zo_generate_exact',group,count,+identity|gridKind(kind)<<8));}
   measure() {return this.enqueue(()=>this.call('zo_measure'));}
+  // Each orientation's nearest orbit neighbour and the separation, linear in the count.
+  spacing() {return this.enqueue(()=>this.call('zo_spacing'));}
   covering() {return this.enqueue(()=>this.call('zo_cover'));}
   relax(steps=1) {return this.enqueue(()=>this.call('zo_relax',steps));}
   // Forces from orbit points within delta mean orientation radii (Quey's near field), 0 for all pairs.
@@ -411,6 +415,9 @@ export class Zxtalori {
   // mode 0 frees the offending tet, 1 also its face neighbours, 2 its one-ring;
   // finish leaves the best sample of the run in place; floorDeg is the minimum
   // separation local steps keep (0 for none).
+  // Basin hopping: a kick after `patience` steps without a relative gain of `gain`; the kick's RMS
+  // angle and the trust radius after it are fractions of the best covering radius. Kept until changed.
+  coverKicks(patience=150,gain=5e-4,size=0.04,trust=0.03) {return this.enqueue(()=>this.call('zo_cover_kicks',patience,gain,size,trust));}
   optimizeCovering(steps,mode=1,finish=false,floorDeg=0) {return this.enqueue(()=>this.call('zo_cover_optimize',steps,mode,+finish,floorDeg));}
   identity({add=false,fixed=false}={}) {return this.enqueue(()=>this.call('zo_identity',(+add)|(+fixed<<1)));}
   set(group,quaternions) {

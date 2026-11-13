@@ -42,12 +42,15 @@ def main_pass(points,*,post=False,post_lanes=32,grow=False,filtered=True):
         buffers.append(device.create_buffer(size=32,usage=usage.STORAGE|usage.COPY_SRC))
         buffers.append(device.create_buffer(size=64*32,usage=usage.STORAGE|usage.COPY_SRC))
         def dispatch_post(capacity,lanes,prime_count,filter_only=False):
-            prefix=f'const GAO_FILTERED_ONLY=false;const GAO_INTEGER_PRIMES={prime_count}u;const GAO_POST=true;const GAO_MAX_P={capacity}u;const GAO_MAX_T={capacity*2}u;const POST_LANES={lanes}u;const NONE=0xffffffffu;struct Cache{{ids:vec4<u32>,more:vec4<u32>}}\n'
-            if filter_only:prefix=prefix.replace('GAO_FILTERED_ONLY=false','GAO_FILTERED_ONLY=true')
+            prefix=f'const GAO_INTEGER_PRIMES={prime_count}u;const GAO_POST=true;const GAO_MAX_P={capacity}u;const GAO_MAX_T={capacity*2}u;const POST_LANES={lanes}u;const NONE=0xffffffffu;struct Cache{{ids:vec4<u32>,more:vec4<u32>}}\n'
             source=prefix+''.join((ROOT/'shaders'/name).read_text() for name in ['gao_storage.wgsl','gao_topology.wgsl','gao_geometry.wgsl','dt_math.wgsl','dt_double.wgsl','dt_integer.wgsl','gao_predicates.wgsl','gao_double.wgsl','gao_post.wgsl'])
             module=device.create_shader_module(code=source)
             pipeline=device.create_compute_pipeline(layout='auto',compute={'module':module,'entry_point':'gao_post'})
-            bind=device.create_bind_group(layout=pipeline.get_bind_group_layout(0),entries=[{'binding':i,'resource':{'buffer':b}} for i,b in enumerate(buffers)])
+            # The filtered pass is the same kernel with GAO_FILTERED (16) in params.reserved.
+            bound=list(buffers)
+            if filter_only:
+                flagged=params.copy();flagged[3]|=16;bound[0]=device.create_buffer_with_data(data=flagged,usage=usage.UNIFORM);retired.append(bound[0])
+            bind=device.create_bind_group(layout=pipeline.get_bind_group_layout(0),entries=[{'binding':i,'resource':{'buffer':b}} for i,b in enumerate(bound)])
             encoder=device.create_command_encoder();work=encoder.begin_compute_pass();work.set_pipeline(pipeline);work.set_bind_group(0,bind);work.dispatch_workgroups(n);work.end();device.queue.submit([encoder.finish()])
         if filtered:dispatch_post(64,post_lanes,32,True)
         dispatch_post(64,post_lanes,32)

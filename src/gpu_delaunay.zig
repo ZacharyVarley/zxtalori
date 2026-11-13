@@ -31,8 +31,7 @@ pub fn makeIndex(g: *gpu.Gpu, coordinates: gpu.Buf, n: u32, lower: [3]f32, upper
     return .{ .heads = heads, .next = next, .dim = dim, .scale = @as(f32, @floatFromInt(dim)) / width };
 }
 fn check(g: *gpu.Gpu) !void {
-    g.submit();
-    try g.dev.wait();
+    try g.wait();
     if (g.dev.takeError() != null) return error.GpuDelaunayValidation;
 }
 pub fn triangulate(a: std.mem.Allocator, g: *gpu.Gpu, coordinates: gpu.Buf, n: u32, lower: [3]f32, upper: [3]f32) !Result {

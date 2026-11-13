@@ -34,6 +34,8 @@ pub const Engine = struct {
     measure_iteration: u32 = 0,
     full_measures: bool = false,
     relax_state: pairs.RelaxState = .{},
+    /// Nearest neighbours for `spacing`, apart from relaxation's forces.
+    spacing_state: pairs.RelaxState = .{},
     /// Relaxation forces from orbit points within this many mean orientation radii
     /// (Quey's delta, near.zig); 0 for all pairs. Energies measured with it set are the
     /// near-field sums.
@@ -60,10 +62,15 @@ pub const Engine = struct {
     inserted_count: u32 = 0,
     cover_result: ?covering.Result = null,
     cover_iteration: u32 = 0,
+    /// The sample (group and orientations) the last `covering` measured, and whether the last
+    /// call returned that result unchanged.
+    cover_key: ?u64 = null,
+    cover_cached: bool = false,
     /// GPU per-source trust radii for coverLocalGpu; reset whenever the sample is replaced.
     trust_gpu: gpu.Buf = .{},
     trust_n: u32 = 0,
     opt: CoverOpt = .{},
+    kicks: Kicks = .{},
     mesh: covering.Mesh = .{},
     err: [2048]u8 = @splat(0),
     text: [8192]u8 = @splat(0),
@@ -82,6 +89,7 @@ pub const Engine = struct {
         self.allocator.free(self.point_local);
         self.g.release(&self.point_local_gpu);
         self.relax_state.deinit(self.allocator);
+        self.spacing_state.deinit(self.allocator);
         self.allocator.free(self.host);
         self.g.release(&self.trust_gpu);
         self.g.release(&self.opt.best);
@@ -141,9 +149,11 @@ pub const Engine = struct {
         self.fixed_index = null;
         self.trust_n = 0;
         self.opt.active = false;
-        // A new sample may be a lattice: cover it first unfenced, on a box-sized grid.
-        self.g.gao_degenerate = true;
-        self.g.gao_fill = 1;
+        // A new sample: the first covering pass measures how much of its box the shell
+        // occupies, and is fenced unless the sample is a known lattice (covering.zig;
+        // `generate` marks transports).
+        self.g.gao_degenerate = false;
+        self.g.gao_fill = 0;
         if (self.fix_identity) self.fixed_index = self.identityIndex();
         self.resetRun();
     }
@@ -232,7 +242,7 @@ pub const Engine = struct {
     /// h is the frequency f (hopf) or the lattice semi-edge (transport). h = 0 takes the
     /// frequency whose count is nearest the target; counts are never cut or deduplicated.
     pub fn generate(self: *Engine, group: groups.Group, h: u32, target: u32, seed: u32, kind: GridKind) !void {
-        if (target > 1000000) return error.GridTooLarge;
+        if (target > hopf.max_count) return error.GridTooLarge;
         const resolved = try resolveKind(group, kind);
         const resolution = switch (resolved) {
             .transport => @max(1, h),
@@ -244,10 +254,15 @@ pub const Engine = struct {
         };
         var q = r.quats;
         errdefer self.g.release(&q);
+        const old_group = self.group;
+        self.setGroup(group);
+        errdefer self.setGroup(old_group);
+        // Product points are orbit images: the zone fold picks each one's representative.
+        if (resolved == .hopf) try self.fold(q, r.count);
         const host = try self.fetch(q, r.count);
         errdefer self.allocator.free(host);
-        self.setGroup(group);
         self.adopt(q, host, r.count);
+        self.g.gao_degenerate = resolved == .transport;
         self.h = resolution;
         self.seed = seed;
         self.base_count = r.count;
@@ -265,7 +280,7 @@ pub const Engine = struct {
         };
     }
     pub fn set(self: *Engine, group: groups.Group, values: []const f32) !void {
-        if (values.len == 0 or values.len % 4 != 0 or values.len > 4000000) return error.InvalidCount;
+        if (values.len == 0 or values.len % 4 != 0 or values.len > 4 * hopf.max_count) return error.InvalidCount;
         for (0..values.len / 4) |i| {
             var norm: f64 = 0;
             for (values[i * 4 ..][0..4]) |x| {
@@ -312,6 +327,24 @@ pub const Engine = struct {
         try self.check();
     }
     /// Largest sample of this group whose energy ratios Refresh computes.
+    /// Each orientation's nearest orbit neighbour (the display's local spacing) and the
+    /// separation, in time linear in N: every nearest neighbour lies well inside a near field
+    /// of a few mean orientation radii (all pairs for small samples). Energy measures are left
+    /// as they are; a sample without current ones gets separation only.
+    pub fn spacing(self: *Engine) !void {
+        if (self.n < 2) return error.TooFewOrientations;
+        const order: u32 = @intCast(groups.operations(self.group).len);
+        self.spacing_state.setNear(self.allocator, &self.g, self.group, if (self.n > spacing_all_pairs) spacing_delta else null);
+        const least = try self.spacing_state.nearestPass(&self.g, self.q, self.n, self.ops, order, try self.separationOut());
+        if (self.measures != null and self.measure_iteration == self.iteration) {
+            self.measures.?.separation_deg = least;
+            return;
+        }
+        const nan = std.math.nan(f64);
+        self.measures = .{ .count_extended = 2 * @as(f64, @floatFromInt(order)) * @as(f64, @floatFromInt(self.n)), .riesz_1 = nan, .riesz_2 = nan, .riesz_3 = nan, .green_ratio = nan, .log_ratio = nan, .quey_energy = nan, .separation_deg = least, .force_rms = nan };
+        self.measure_iteration = self.iteration;
+        self.full_measures = false;
+    }
     pub fn ratioLimit(self: *Engine) u32 {
         const order: f64 = @floatFromInt(groups.operations(self.group).len);
         return @intFromFloat(@floor(@sqrt(full_measure_pairs / order)));
@@ -324,7 +357,7 @@ pub const Engine = struct {
         try self.adoptLocal();
     }
     pub fn generateRandom(self: *Engine, group: groups.Group, count: u32, seed: u32) !void {
-        if (count < 1 or count > 1000000) return error.InvalidCount;
+        if (count < 1 or count > hopf.max_count) return error.InvalidCount;
         var q = self.g.storage(@as(u64, count) * 16);
         errdefer self.g.release(&q);
         const params = [4]u32{ count, seed, 0, 0 };
@@ -341,6 +374,21 @@ pub const Engine = struct {
         self.base_count = count;
         self.inserted_count = 0;
     }
+    /// The covering radius on request: measured again only when the sample has changed since
+    /// the last request (the same orientations in the same group have the same covering).
+    pub fn checkCovering(self: *Engine) !void {
+        const key = self.sampleKey();
+        self.cover_cached = self.cover_result != null and self.cover_key == key and self.cover_iteration == self.iteration and (self.point_covering_iteration orelse self.iteration +% 1) == self.iteration;
+        if (self.cover_cached) return;
+        self.cover_key = null;
+        try self.measureCovering();
+        self.cover_key = key;
+    }
+    fn sampleKey(self: *const Engine) u64 {
+        var h = std.hash.Wyhash.init(@intFromEnum(self.group));
+        h.update(std.mem.sliceAsBytes(self.host));
+        return h.final();
+    }
     pub fn measureCovering(self: *Engine) !void {
         if (self.n < 4) return error.TooFewOrientations;
         self.cancelled.store(false, .release);
@@ -353,9 +401,16 @@ pub const Engine = struct {
     /// Covering optimization (shaders/local.wgsl). Each step is a local
     /// sequential-LP move: disjoint jobs around the worst caps, each solved in its
     /// own workgroup, then an exact re-check that reverts jobs whose local maximum
-    /// did not drop. After `cover_patience` steps without a new best, the best
-    /// sample is restored and kicked. `finish` leaves the best sample in place.
+    /// did not drop. After `kicks.patience` steps without a relative gain of
+    /// `kicks.progress`, the best sample is restored and kicked. `finish` leaves the best sample in place.
     /// Covering measures are current on return.
+    pub fn setKicks(self: *Engine, kicks: Kicks) !void {
+        if (kicks.patience < 1 or kicks.patience > 1000000) return error.InvalidKickPatience;
+        if (!(kicks.progress >= 0 and kicks.progress < 1)) return error.InvalidKickProgress;
+        if (!(kicks.size >= 0 and kicks.size <= 1)) return error.InvalidKickSize;
+        if (!(kicks.trust > 0 and kicks.trust <= 1)) return error.InvalidKickTrust;
+        self.kicks = kicks;
+    }
     pub fn optimizeCovering(self: *Engine, steps: u32, mode: u32, finish: bool, floor_deg: f32) !void {
         if (self.n < 4) return error.TooFewOrientations;
         if (mode & 3 > 1 or mode & ~@as(u32, 0xff001f) != 0) return error.InvalidCoveringMode;
@@ -399,16 +454,16 @@ pub const Engine = struct {
                 self.opt.candidate_radius = radius;
                 g.copy(self.opt.start, 0, self.opt.candidate, 0, bytes);
             }
-            // A descent has plateaued after cover_patience steps without a
-            // relative gain of cover_progress; creeping gains do not count.
-            if (radius < self.opt.reference * (1 - cover_progress)) {
+            // A descent has plateaued after kicks.patience steps without a
+            // relative gain of kicks.progress; creeping gains do not count.
+            if (radius < self.opt.reference * (1 - @as(f64, self.kicks.progress))) {
                 self.opt.reference = radius;
                 self.opt.stall = 0;
             } else self.opt.stall += 1;
             self.opt.steps += 1;
             self.opt.jobs = result[0];
             self.opt.improved = result[1];
-            if (self.opt.stall >= cover_patience) {
+            if (self.opt.stall >= self.kicks.patience) {
                 // Every source moves: the live pass is built again from the kicked sample.
                 try self.endLive();
                 try self.settleCandidate(floor_deg);
@@ -416,9 +471,9 @@ pub const Engine = struct {
                 const rho: f32 = @floatCast(self.opt.best_radius * std.math.pi / 360);
                 // Every source is kicked: at a plateau the caps within 1% of the largest
                 // touch every source, so a kick aimed at the largest caps is global anyway.
-                try self.localPass("local/kick", "kick", cover_kick * rho, self.opt.kicks);
+                try self.localPass("local/kick", "kick", self.kicks.size * rho, self.opt.kicks);
                 try self.fold(self.q, self.n);
-                try self.localPass("local/fill_trust", "fill_trust", cover_kick_trust, 0);
+                try self.localPass("local/fill_trust", "fill_trust", self.kicks.trust, 0);
                 self.opt.kicks += 1;
                 self.opt.reference = std.math.inf(f64);
                 self.opt.stall = 0;
@@ -444,19 +499,11 @@ pub const Engine = struct {
         } else self.g.read(self.q, 0, std.mem.sliceAsBytes(self.host));
         self.g.submit();
         try self.check();
-        // The covering radius: from the live covering while it is exact, else a full pass.
+        // The covering radius only: from the live covering while it is exact, else a full
+        // pass. Energy and separation are pair sums over the whole orbit (about 1.6 s at 50k
+        // orientations, growing as N^2), so they are left for `measure`; measures_current
+        // says they describe an earlier iteration.
         if (finish or !try self.liveCovering()) try self.measureCovering();
-        // Energy and separation (pair sums over the whole orbit) at most about a tenth of
-        // the run's wall time: again once 9x their last cost has passed, and at the end.
-        const now = clock.ms();
-        if (finish or self.measures == null or self.opt.energy_ms == null or now - self.opt.energy_at >= 9 * self.opt.energy_ms.?) {
-            self.syncNeighbourhood();
-            self.measures = try self.relax_state.measure(self.allocator, &self.g, self.q, self.n, self.ops, @intCast(groups.operations(self.group).len), try self.separationOut());
-            self.full_measures = false;
-            self.measure_iteration = self.iteration;
-            self.opt.energy_at = clock.ms();
-            self.opt.energy_ms = self.opt.energy_at - now;
-        }
         self.opt.iteration = self.iteration;
     }
     /// The descent's lowest sample becomes the best if it beats it and holds the floor.
@@ -693,7 +740,7 @@ pub const Engine = struct {
         if (!self.opt.live_on) return false;
         const live = &self.opt.live;
         const result = live.caps(self.allocator, &self.g, self.q, self.ops, null, null, try self.localOut()) catch |err| switch (err) {
-            error.CertificateFailed, error.NoCoveringCircumcaps, error.CoveringWitnessMismatch => {
+            error.CertificateFailed, error.NoCoveringCircumcaps, error.CoveringWitnessMismatch, error.UnresolvedCircumcap => {
                 self.dropLive();
                 return false;
             },
@@ -915,6 +962,8 @@ pub const Engine = struct {
             .mesh_ratio = if (covering_current and measures_current and m.?.separation_deg > 0) finite(self.cover_result.?.radius_deg / m.?.separation_deg) else null,
             .covering_radius_deg = if (self.cover_result) |r| finite(r.radius_deg) else null,
             .covering_current = self.cover_result != null and self.cover_iteration == self.iteration,
+            .covering_cached = self.cover_cached,
+            .covering_unresolved_caps = if (self.cover_result) |r| @as(?u32, r.unresolved_caps) else null,
             .covering_iteration = if (self.cover_result != null) self.cover_iteration else @as(?u32, null),
             .covering_witness = if (self.cover_result) |r| @as(?[4]f32, r.witness) else null,
             .covering_domain_bound_deg = if (self.cover_result) |r| finite(r.domain_bound_deg) else null,
@@ -937,7 +986,7 @@ pub const Engine = struct {
             .point_covering_iteration = self.point_covering_iteration,
             .energy_neighbourhood = if (m != null and self.measure_neighbourhood > 0) @as(?f64, self.measure_neighbourhood) else null,
             .ratio_limit = self.ratioLimit(),
-            .precision = if (m == null) "Not measured" else if (!measures_current) "Energy and separation from an earlier iteration" else if (self.full_measures) "All measures current" else if (self.n > self.ratioLimit()) "Energy and separation current; this sample exceeds the ratio limit" else "Energy and separation current; refresh energy ratios",
+            .precision = if (m == null) "Not measured" else if (!measures_current) "Energy and separation from an earlier iteration" else if (!std.math.isFinite(m.?.quey_energy)) "Separation current; energy not measured" else if (self.full_measures) "All measures current" else if (self.n > self.ratioLimit()) "Energy and separation current; this sample exceeds the ratio limit" else "Energy and separation current; refresh energy ratios",
             .energy = if (m) |x| finite(x.quey_energy) else null,
             .quey_energy = if (m) |x| finite(x.quey_energy) else null,
             .riesz_1 = if (m) |x| finite(x.riesz_1) else null,
@@ -950,6 +999,7 @@ pub const Engine = struct {
             .force_rms = if (m) |x| finite(x.force_rms) else finite(self.force_rms),
             .covering_optimizer_steps = self.opt.steps,
             .covering_optimizer_kicks = self.opt.kicks,
+            .covering_kick_settings = self.kicks,
             .covering_optimizer_best_deg = if (self.opt.active) finite(self.opt.best_radius) else null,
             .covering_optimizer_jobs = self.opt.jobs,
             .covering_optimizer_improved = self.opt.improved,
@@ -1041,24 +1091,26 @@ const CoverOpt = struct {
     live_failures: u32 = 0,
     unfolded: bool = false,
     /// Energy measures of this run: when the last one ended and what it cost (ms).
-    energy_at: f64 = 0,
-    energy_ms: ?f64 = null,
     /// Development: milliseconds per phase of local steps (caps with their wait, recording
     /// the jobs and live update, the step's wait).
     times: [3]f64 = @splat(0),
 };
 // Measured on O/T/I at N around 1000 (docs/methods.md): initial trust radius and
 // candidate band as fractions of the covering radius, solver iterations,
-// selection rounds, stall steps before a kick, relative gain that resets the
-// stall count, kick RMS angle, post-kick trust.
+// selection rounds.
 const cover_box: f32 = 0.15;
 const cover_band: f32 = 0.3;
 const cover_solver_iterations: u32 = 400;
 const cover_rounds: u32 = 4;
-const cover_patience: u32 = 150;
-const cover_progress: f64 = 5e-4;
-const cover_kick: f32 = 0.04;
-const cover_kick_trust: f32 = 0.03;
+/// Basin hopping (`zo_cover_kicks`; defaults measured as above): steps without a relative
+/// gain of `progress` before a kick, the kick's RMS angle and the trust radius after it,
+/// both as fractions of the best covering radius.
+pub const Kicks = struct {
+    patience: u32 = 150,
+    progress: f32 = 5e-4,
+    size: f32 = 0.04,
+    trust: f32 = 0.03,
+};
 // Shell reach in units of the covering radius (a job gathers within 2.5 R), and
 // local LP rounds per job and step.
 const cover_shell_reach: f64 = 1.75;
@@ -1069,6 +1121,10 @@ const cover_live_reach: f64 = 2.5;
 /// Pair evaluations (n^2 |K|) up to which Refresh computes the Riesz, Green and log
 /// ratios: a few seconds on a discrete GPU (T up to about 64,000 orientations).
 const full_measure_pairs: f64 = 5e10;
+// `spacing`: all pairs up to this many orientations, then a near field of this many mean
+// orientation radii (a gap of four in a uniform sample has probability about e^-64).
+const spacing_all_pairs: u32 = 20000;
+const spacing_delta: f64 = 4;
 const cover_local_rounds: u32 = 6;
 const cover_local_solver_iterations: u32 = 120;
 // Full-pass steps after a step whose local jobs were mostly skipped.

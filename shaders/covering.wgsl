@@ -14,31 +14,44 @@ fn quaternion_ds(index:u32)->array<vec2<f32>,4>{
 }
 fn in_zone(q:vec4<f32>)->bool{if(q.x<0.0){return false;}for(var k=0u;k<p.first;k++){if(abs(dot(q,normalize(group_ops[k])))>q.x+2e-6){return false;}}return true;}
 @compute @workgroup_size(128)
-fn circumcaps(@builtin(global_invocation_id) id:vec3<u32>){
+fn circumcaps(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u,0u,0u);
     let i=id.x;if(i>=p.seeds){return;}cap_data[i*2u]=vec4<f32>(0.0);cap_data[i*2u+1u]=vec4<f32>(0.0);
     let t=tetrahedra[i];var q:array<array<vec2<f32>,4>,4>;for(var j=0u;j<4u;j++){q[j]=quaternion_ds(t[j]);}
     var edges:array<array<vec2<f32>,4>,3>;for(var j=0u;j<3u;j++){for(var k=0u;k<4u;k++){edges[j][k]=ds_sub(q[j+1u][k],q[0][k]);}}
     var centre:vec4<f32>;
     for(var k=0u;k<4u;k++){var rows:array<array<vec2<f32>,3>,3>;for(var j=0u;j<3u;j++){var at=0u;for(var l=0u;l<4u;l++){if(l!=k){rows[j][at]=edges[j][l];at++;}}}let minor=ds_det(rows[0],rows[1],rows[2]);centre[k]=rounded(minor.x+minor.y)*select(1.0,-1.0,(k&1u)!=0u);}
-    let length=length(centre);if(!(length>1e-24)){atomicAdd(&cover[15],1u);return;}centre=centre/length;
+    // A cap this pass cannot resolve (no centre, or vertices not equidistant from it) is counted
+    // in word 20 with an upper estimate of its radius in word 21: the result is only valid if no
+    // such cap could be the largest. A degenerate centre has no estimate (infinity).
+    let length=length(centre);if(!(length>1e-24)){atomicAdd(&cover[20],1u);atomicMax(&cover[21],0x7f800000u);return;}centre=centre/length;
     let first=vec4<f32>(q[0][0].x,q[0][1].x,q[0][2].x,q[0][3].x);var height=dot(centre,first);
     if(centre.x+height<0.0){centre=-centre;height=-height;}
     if(height<=0.0||!in_zone(centre)){return;}
     var smallest=4.0;var largest=0.0;
     for(var j=0u;j<4u;j++){var distance=vec2<f32>(0.0);for(var k=0u;k<4u;k++){let d=ds_sub(q[j][k],vec2<f32>(centre[k],0.0));distance=ds_add(distance,ds_mul(d,d));}let value=max(0.0,rounded(distance.x+distance.y));smallest=min(smallest,value);largest=max(largest,value);}
     let radius=2.0*asin(min(1.0,sqrt(largest)*0.5));
+    // Equidistance relative to the cap's size. The f32 centre moves each squared chord by up to
+    // about 4 |delta c| chord, |delta c| ~ 1.2e-7, so the allowance has a chord-proportional part
+    // as well as a relative one.
+    if(largest-smallest>2e-6*sqrt(largest)+1e-4*largest){
+        // Every vertex beyond the margin: an image outside the shell would fill it (not a cap).
+        if(2.0*asin(min(1.0,sqrt(smallest)*0.5))>p.scale.y+2e-5){atomicAdd(&cover[15],1u);return;}
+        atomicAdd(&cover[20],1u);atomicMax(&cover[21],bitcast<u32>(radius));return;
+    }
+    // Beyond the margin the cap may hold images outside the shell: not an empty cap of the sample.
     if(radius>p.scale.y+2e-5){atomicAdd(&cover[15],1u);return;}
-    if(largest-smallest>1e-5){atomicAdd(&cover[15],1u);return;}
     cap_data[i*2u]=centre;cap_data[i*2u+1u]=vec4<f32>(radius,smallest,largest,0.0);atomicMax(&cover[8],bitcast<u32>(radius));atomicAdd(&cover[10],1u);
 }
 @compute @workgroup_size(128)
-fn select_cap(@builtin(global_invocation_id) id:vec3<u32>){let i=id.x;if(i<p.seeds&&bitcast<u32>(cap_data[i*2u+1u].x)==atomicLoad(&cover[8])&&cap_data[i*2u].x>=0.0){atomicMin(&cover[9],i);}}
+fn select_cap(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u,0u,0u);let i=id.x;if(i<p.seeds&&bitcast<u32>(cap_data[i*2u+1u].x)==atomicLoad(&cover[8])&&cap_data[i*2u].x>=0.0){atomicMin(&cover[9],i);}}
 // Four positive-major-component cube charts cover RP3. The normalization map
 // (1,x,y,z)/||(1,x,y,z)|| has differential norm <=1. A grid of m subdivisions
 // therefore covers every orientation within delta=sqrt(3)/m on S3.
 // If each folded chart vertex has a shell site within T-delta, the triangle
 // inequality proves that the full quotient is covered within T. No guess about
 // a small observed Delaunay radius is used as a shell-completeness certificate.
+// A zone inside chart 0 (groups.chartReach) needs only chart 0's vertices within half a step
+// of the zone's box: p.scale.w charts, coordinates [first, cap - first] (first: p.lower.w bits).
 fn certificate_probe_near_zone(q:vec4<f32>)->bool{
     // A nearest chart vertex lies within delta of its domain point. If a
     // vertex is farther than delta from any FZ halfspace, it cannot be that
@@ -53,14 +66,14 @@ fn certificate_probe_near_zone(q:vec4<f32>)->bool{
     return true;
 }
 fn certificate_chart_probe(index:u32)->vec4<f32>{
-    let side=p.cap+1u;let size=side*side*side;
-    let chart=index/size;let local=index%size;let xyz=vec3<u32>(local%side,(local/side)%side,local/(side*side));
+    let first=bitcast<u32>(p.lower.w);let side=p.cap+1u-2u*first;let size=side*side*side;
+    let chart=index/size;let local=index%size;let xyz=vec3<u32>(local%side,(local/side)%side,local/(side*side))+vec3<u32>(first);
     var q:vec4<f32>;q[chart]=1.0;var at=0u;for(var k=0u;k<4u;k++){if(k!=chart){q[k]=2.0*f32(xyz[at])/f32(p.cap)-1.0;at++;}}
     return normalize(q);
 }
 @compute @workgroup_size(128)
 fn certify_shell(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
-    let index=id.x+id.y*groups.x*128u;let m=p.cap;let side=m+1u;let size=side*side*side;if(index>=4u*size){return;}
+    let index=id.x+id.y*groups.x*128u;let side=p.cap+1u-2u*bitcast<u32>(p.lower.w);let size=side*side*side;if(index>=u32(p.scale.w)*size){return;}
     var q=certificate_chart_probe(index);if(!certificate_probe_near_zone(q)){return;}
     var best=q;var scalar=abs(q.x);for(var k=0u;k<p.first;k++){var candidate=qmul(q,normalize(group_ops[k]));if(candidate.x<0.0){candidate=-candidate;}if(candidate.x>scalar){best=candidate;scalar=candidate.x;}}q=normalize(best);if(q.x<0.0){q=-q;}
     let radius=p.scale.y-p.scale.z-2e-5;if(radius<=0.0){atomicAdd(&cover[11],1u);return;}
@@ -75,7 +88,7 @@ fn certify_shell(@builtin(global_invocation_id) id:vec3<u32>,@builtin(num_workgr
     if(!found){atomicAdd(&cover[11],1u);}atomicAdd(&cover[12],1u);
 }
 @compute @workgroup_size(128)
-fn check_witness(@builtin(global_invocation_id) id:vec3<u32>){
+fn check_witness(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u,0u,0u);
     let at=id.x;let n=p.budget;if(at>=n*p.first){return;}let cap=atomicLoad(&cover[9]);if(cap==NONE){return;}
     let q=normalize(qmul(normalize(original_sites[at%n]),normalize(group_ops[at/n])));let centre=cap_data[cap*2u];let d1=q-centre;let d2=q+centre;
     // The selected cap's centre rides back with the other results in words 16..19.
@@ -90,7 +103,7 @@ fn check_witness(@builtin(global_invocation_id) id:vec3<u32>){
 // vertex's link is a triangulated sphere, so its Delaunay neighbours, the faces of its
 // Voronoi cell, number 2 + tetrahedra / 2.
 @compute @workgroup_size(128)
-fn local_caps(@builtin(global_invocation_id) id:vec3<u32>){
+fn local_caps(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u,0u,0u);
     let i=id.x;if(i>=p.seeds){return;}
     let t=tetrahedra[i];let rho=cap_data[i*2u+1u].x;
     for(var j=0u;j<4u;j++){
@@ -105,7 +118,7 @@ fn local_caps(@builtin(global_invocation_id) id:vec3<u32>){
 // With c = sum_j lambda_j v_j and c.v_j = cos(rho): drho = -cot(rho) sum_j lambda_j c.(d v_j).
 // Left moves commute with the right action, so every image follows its source's d.
 @compute @workgroup_size(128)
-fn cap_rows_kernel(@builtin(global_invocation_id) id:vec3<u32>){
+fn cap_rows_kernel(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u,0u,0u);
     let i=id.x;if(i>=p.seeds){return;}
     let rho=cap_data[i*2u+1u].x;let top=bitcast<f32>(atomicLoad(&cover[8]));
     if(!(rho>0.0)||rho<p.scale.w*top){return;}

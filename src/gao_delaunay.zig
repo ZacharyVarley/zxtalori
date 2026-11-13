@@ -11,30 +11,51 @@ const geometry = shaders.gao_storage ++ shaders.gao_topology ++ shaders.gao_geom
 const main_code = "const GAO_POST=false;const GAO_MAX_P=32u;const GAO_MAX_T=64u;\n" ++ geometry ++ shaders.gao_main;
 const numeric = shaders.dt_math ++ shaders.dt_double ++ shaders.dt_integer ++ shaders.gao_predicates ++ shaders.gao_double;
 const numeric_header = "const POST_LANES=32u;const NONE=0xffffffffu;struct Cache{ids:vec4<u32>,more:vec4<u32>}\n";
-const numeric_prefix = "const GAO_FILTERED_ONLY=false;const GAO_INTEGER_PRIMES=32u;" ++ numeric_header;
-const filtered_prefix = "const GAO_FILTERED_ONLY=true;const GAO_INTEGER_PRIMES=32u;" ++ numeric_header;
-const wide_prefix = "const GAO_FILTERED_ONLY=false;const GAO_INTEGER_PRIMES=96u;" ++ numeric_header;
+const numeric_prefix = "const GAO_INTEGER_PRIMES=32u;" ++ numeric_header;
+const wide_prefix = "const GAO_INTEGER_PRIMES=96u;" ++ numeric_header;
 const mark_code = "const GAO_POST=false;const GAO_MAX_P=32u;const GAO_MAX_T=64u;\n" ++ geometry ++ shaders.gao_mark;
 const live_code = "const GAO_POST=true;const GAO_MAX_P=64u;const GAO_MAX_T=128u;\n" ++ numeric_prefix ++ geometry ++ numeric ++ shaders.gao_post ++ shaders.gao_live;
-const filtered_post_code = "const GAO_POST=true;const GAO_MAX_P=64u;const GAO_MAX_T=128u;\n" ++ filtered_prefix ++ geometry ++ numeric ++ shaders.gao_post;
 const post_code = "const GAO_POST=true;const GAO_MAX_P=64u;const GAO_MAX_T=128u;\n" ++ numeric_prefix ++ geometry ++ numeric ++ shaders.gao_post;
 const output_code = "const GAO_POST=false;const GAO_MAX_P=64u;const GAO_MAX_T=128u;\n" ++ numeric_prefix ++ geometry ++ numeric ++ shaders.gao_output;
 const wide_post_code = "const GAO_POST=true;const GAO_MAX_P=64u;const GAO_MAX_T=128u;\n" ++ wide_prefix ++ geometry ++ numeric ++ shaders.gao_post;
 const wide_output_code = "const GAO_POST=false;const GAO_MAX_P=64u;const GAO_MAX_T=128u;\n" ++ wide_prefix ++ geometry ++ numeric ++ shaders.gao_output;
 const grown_post_code = "const GAO_POST=true;const GAO_MAX_P=128u;const GAO_MAX_T=256u;\n" ++ wide_prefix ++ geometry ++ numeric ++ shaders.gao_post;
 const grown_output_code = "const GAO_POST=false;const GAO_MAX_P=128u;const GAO_MAX_T=256u;\n" ++ wide_prefix ++ geometry ++ numeric ++ shaders.gao_output;
-const maximum_prefix = "const GAO_FILTERED_ONLY=false;const GAO_INTEGER_PRIMES=96u;const POST_LANES=16u;const NONE=0xffffffffu;struct Cache{ids:vec4<u32>,more:vec4<u32>}\n";
+const maximum_prefix = "const GAO_INTEGER_PRIMES=96u;const POST_LANES=16u;const NONE=0xffffffffu;struct Cache{ids:vec4<u32>,more:vec4<u32>}\n";
 const maximum_post_code = "const GAO_POST=true;const GAO_MAX_P=256u;const GAO_MAX_T=512u;\n" ++ maximum_prefix ++ geometry ++ numeric ++ shaders.gao_post;
 const maximum_output_code = "const GAO_POST=false;const GAO_MAX_P=256u;const GAO_MAX_T=512u;\n" ++ maximum_prefix ++ geometry ++ numeric ++ shaders.gao_output;
+/// GAO_FILTERED in shaders/gao_storage.wgsl: the post pass defers exact signs to a second, full pass.
+const filtered_bit: u32 = 16;
+/// GAO_EMIT in shaders/gao_output.wgsl: the output pass writes tetrahedra instead of the summary.
+const emit_bit: u32 = 32;
 fn check(g: *gpu.Gpu) !void {
-    g.submit();
-    try g.dev.wait();
+    try g.wait();
     if (g.dev.takeError() != null) return error.GpuGaoValidation;
 }
 /// A Gao triangulation kept on the GPU: bucket-sorted coordinates, the grid, and every
 /// site's star (its local mesh, owning the tetrahedra it outputs). `restar` recomputes
 /// only the stars marked pending, with the same kernels and exact predicates, after the
 /// caller has rewritten moved sites in `coordinates` (see covering.Live).
+/// Stars per dispatch of the main and post passes. One dispatch over every star can hold the
+/// GPU for seconds at a million sites, and the display stalls until it ends (watchdogs reset
+/// devices after 2 s); slices a submit apart take tens of milliseconds each. A multiple of the
+/// main pass's 128 threads, so a slice's threads are exactly its stars.
+const star_slice: u32 = 32768;
+/// The main pass (a thread per star) or a post pass (a workgroup per star) over stars
+/// [0, n), in slices; binds[0] is replaced by `params` with each slice's first star.
+fn dispatchStars(g: *gpu.Gpu, pipe: u32, params: Params, n: u32, per_workgroup: bool, binds: []const gpu.Bind) void {
+    var slice: [16]gpu.Bind = undefined;
+    @memcpy(slice[0..binds.len], binds);
+    var first: u32 = 0;
+    while (first < n) : (first += star_slice) {
+        const count = @min(star_slice, n - first);
+        var at = params;
+        at.lower[3] = @bitCast(first);
+        slice[0] = g.uniform(0, std.mem.asBytes(&at));
+        g.dispatch(pipe, if (per_workgroup) count else (count + 127) / 128, 1, 1, slice[0..binds.len]);
+        if (first + count < n) g.submit();
+    }
+}
 pub const Live = struct {
     n: u32 = 0,
     params: Params = undefined,
@@ -51,11 +72,13 @@ pub const Live = struct {
     slots: gpu.Buf = .{},
     /// Grid counting cursors (and, past the cells, the occupied-cell count).
     cursors: gpu.Buf = .{},
+    /// The summary pass's unused tetrahedron output.
+    no_tets: gpu.Buf = .{},
     /// Local mesh capacity per star (64, 128 or 256 vertices) and the 96-prime workspace.
     capacity: u32 = 64,
     wide: bool = false,
     pub fn release(self: *Live, g: *gpu.Gpu) void {
-        for ([_]*gpu.Buf{ &self.coordinates, &self.offsets, &self.triangles, &self.indices, &self.states, &self.table, &self.counters, &self.records, &self.slots, &self.cursors }) |b| g.release(b);
+        for ([_]*gpu.Buf{ &self.coordinates, &self.offsets, &self.triangles, &self.indices, &self.states, &self.table, &self.counters, &self.records, &self.slots, &self.cursors, &self.no_tets }) |b| g.release(b);
         self.* = .{};
     }
     fn postPipe(self: *const Live, g: *gpu.Gpu) !u32 {
@@ -72,27 +95,22 @@ pub const Live = struct {
             else => .{ .key = "256", .code = maximum_output_code },
         };
     }
-    fn summaryPipe(self: *const Live, g: *gpu.Gpu) !u32 {
+    /// The summary and the emit pass (GAO_EMIT, shaders/gao_output.wgsl) of this capacity.
+    fn outputPipe(self: *const Live, g: *gpu.Gpu) !u32 {
         const o = self.outputCode();
         return switch (self.capacity) {
-            64 => if (self.wide) try g.pipeline("gao/summary_wide", o.code, "gao_summary") else try g.pipeline("gao/summary", o.code, "gao_summary"),
-            128 => try g.pipeline("gao/summary_128", o.code, "gao_summary"),
-            else => try g.pipeline("gao/summary_256", o.code, "gao_summary"),
-        };
-    }
-    fn emitPipe(self: *const Live, g: *gpu.Gpu) !u32 {
-        const o = self.outputCode();
-        return switch (self.capacity) {
-            64 => if (self.wide) try g.pipeline("gao/emit_wide", o.code, "gao_emit") else try g.pipeline("gao/emit", o.code, "gao_emit"),
-            128 => try g.pipeline("gao/emit_128", o.code, "gao_emit"),
-            else => try g.pipeline("gao/emit_256", o.code, "gao_emit"),
+            64 => if (self.wide) try g.pipeline("gao/output_wide", o.code, "gao_output") else try g.pipeline("gao/output", o.code, "gao_output"),
+            128 => try g.pipeline("gao/output_128", o.code, "gao_output"),
+            else => try g.pipeline("gao/output_256", o.code, "gao_output"),
         };
     }
     fn postBinds(self: *const Live, g: *gpu.Gpu, params: *const Params) [9]gpu.Bind {
         return .{ g.uniform(0, std.mem.asBytes(params)), self.coordinates.at(1), self.offsets.at(2), self.triangles.at(3), self.indices.at(4), self.states.at(5), self.table.at(6), self.counters.at(7), self.records.at(8) };
     }
     fn summarize(self: *Live, g: *gpu.Gpu, params: *const Params) !void {
-        g.dispatch(try self.summaryPipe(g), (self.n + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(params)), self.coordinates.at(1), self.triangles.at(3), self.indices.at(4), self.states.at(5), self.table.at(6), self.counters.at(7) });
+        // The summary writes no tetrahedra; its output binding is a placeholder.
+        g.ensure(&self.no_tets, 16);
+        g.dispatchFlat(try self.outputPipe(g), (self.n + 127) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(params)), self.coordinates.at(1), self.triangles.at(3), self.indices.at(4), self.states.at(5), self.table.at(6), self.counters.at(7), self.no_tets.at(8) });
     }
     /// Recomputes the stars marked GAO_PENDING in `states` (after the caller has
     /// rewritten the changed sites in `coordinates` and listed the grid again).
@@ -109,12 +127,16 @@ pub const Live = struct {
             binds[8] = list[0].at(8);
             g.dispatchIndirect(try g.pipeline("gao/live_star", live_code, "gao_live_star"), list[1], 0, &binds);
         }
-        g.dispatch(main, (self.n + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), self.coordinates.at(1), self.offsets.at(2), self.triangles.at(3), self.indices.at(4), self.states.at(5) });
+        dispatchStars(g, main, params, self.n, false, &.{ g.uniform(0, std.mem.asBytes(&params)), self.coordinates.at(1), self.offsets.at(2), self.triangles.at(3), self.indices.at(4), self.states.at(5) });
         // Only stars the main pass left unfinished have a nonzero state: the post passes
         // touch nothing else.
         params.scale[3] = 0;
-        if (self.capacity == 64 and !self.wide) g.dispatchFlat(try g.pipeline("gao/post_filtered", filtered_post_code, "gao_post"), self.n, 1, &self.postBinds(g, &params));
-        g.dispatchFlat(try self.postPipe(g), self.n, 1, &self.postBinds(g, &params));
+        if (self.capacity == 64 and !self.wide) {
+            var filtered = params;
+            filtered.reserved |= filtered_bit;
+            dispatchStars(g, try self.postPipe(g), filtered, self.n, true, &self.postBinds(g, &filtered));
+        }
+        dispatchStars(g, try self.postPipe(g), params, self.n, true, &self.postBinds(g, &params));
         if (out) |stats| {
             try self.summarize(g, &params);
             g.read(self.counters, 0, std.mem.asBytes(stats));
@@ -124,10 +146,10 @@ pub const Live = struct {
     /// GAO_LISTED triangulation whose slots do not move.
     pub fn relist(self: *Live, g: *gpu.Gpu) !void {
         const u = g.uniform(0, std.mem.asBytes(&self.params));
-        g.dispatch(try g.pipeline("gao/grid_clear", shaders.gao_grid, "gao_grid_clear"), (self.cells + 128) / 128, 1, 1, &.{ u, self.offsets.at(2) });
-        g.dispatch(try g.pipeline("gao/list_count", shaders.gao_grid, "gao_list_count"), (self.n + 127) / 128, 1, 1, &.{ u, self.coordinates.at(1), self.offsets.at(2) });
+        g.dispatchFlat(try g.pipeline("gao/grid_clear", shaders.gao_grid, "gao_grid_clear"), (self.cells + 128) / 128, 1, &.{ u, self.offsets.at(2) });
+        g.dispatchFlat(try g.pipeline("gao/list_count", shaders.gao_grid, "gao_list_count"), (self.n + 127) / 128, 1, &.{ u, self.coordinates.at(1), self.offsets.at(2) });
         g.dispatch(try g.pipeline("gao/grid_prefix", shaders.gao_grid, "gao_grid_prefix"), 1, 1, 1, &.{ u, self.offsets.at(2), self.cursors.at(4) });
-        g.dispatch(try g.pipeline("gao/list_scatter", shaders.gao_grid, "gao_list_scatter"), (self.n + 127) / 128, 1, 1, &.{ u, self.coordinates.at(1), self.offsets.at(2), self.cursors.at(4) });
+        g.dispatchFlat(try g.pipeline("gao/list_scatter", shaders.gao_grid, "gao_list_scatter"), (self.n + 127) / 128, 1, &.{ u, self.coordinates.at(1), self.offsets.at(2), self.cursors.at(4) });
     }
     /// Marks the stars a move's changes can alter (shaders/gao_mark.wgsl): `flags` holds
     /// the marks and reaches, `pending` receives the marked stars, `changes` is the move's
@@ -161,7 +183,9 @@ pub const Live = struct {
         errdefer g.release(&output);
         g.clear(self.counters);
         // No wait here: the caller's next readback surfaces any error in the emit.
-        g.dispatch(try self.emitPipe(g), (self.n + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&self.params)), self.coordinates.at(1), self.triangles.at(3), self.indices.at(4), self.states.at(5), self.table.at(6), self.counters.at(7), output.at(8) });
+        var params = self.params;
+        params.reserved |= emit_bit;
+        g.dispatchFlat(try self.outputPipe(g), (self.n + 127) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), self.coordinates.at(1), self.triangles.at(3), self.indices.at(4), self.states.at(5), self.table.at(6), self.counters.at(7), output.at(8) });
         return output;
     }
 };
@@ -193,18 +217,24 @@ pub fn prepare(g: *gpu.Gpu, input: gpu.Buf, n: u32, capacity: u32, seeds: u32, l
     if (regional_margin) |margin| if (!(margin > 0 and margin < std.math.pi / 2.0 and std.math.isFinite(margin))) return error.InvalidCoveringMargin;
     if (@as(u64, capacity) * 128 * 4 > g.lim.max_storage_binding) return error.GpuGaoBatchTooLarge;
     const target = (g.delaunay_mode >> 16) & 15;
-    const bucket_target: f64 = if (target == 1 or target == 2 or target == 4 or target == 8) @floatFromInt(target) else 4;
-    // Sized from the occupied volume of the previous grid: a shell filling a sixth of
-    // its box (the T zone) would otherwise crowd each occupied cell.
-    const fill: f64 = std.math.clamp(g.gao_fill, 0.05, 1);
-    const dim: u32 = @intFromFloat(@max(1.0, @min(@round(std.math.cbrt(@as(f64, @floatFromInt(n)) / (bucket_target * fill))), 1024)));
-    const cells = dim * dim * dim;
+    // Sites per occupied cell (delaunay_mode bits 16..19 override it). First covering checks at
+    // 500k (O, I, T grids; O, I random) took 1.73 s in all on box-sized grids, 1.55 s at 4 per
+    // occupied cell and 1.44 s at 5; the best value differs by group (O grid: 327 ms at 4,
+    // 166 ms at 5), so 5 is the compromise with the smallest worst case.
+    const bucket_target: f64 = if (target != 0) @floatFromInt(target) else 5;
     var width: f32 = 1e-5;
     var extent: f32 = 0;
     for (lower, upper) |x, y| {
         width = @max(width, y - x);
         extent = @max(extent, @max(@abs(x), @abs(y)));
     }
+    // Sized to the occupied volume: a shell filling a sixth of its box (the T zone) would
+    // otherwise crowd each occupied cell. The previous grid's occupancy, or for a new sample
+    // (gao_fill 0) a count on a box-sized trial grid; lattices keep the box-sized grid, which
+    // suits their co-spherical cells better (T transport at 354k: 4.5 s against 13.5 s).
+    const fill: f64 = if (g.gao_fill > 0) std.math.clamp(g.gao_fill, 0.05, 1) else if (g.gao_degenerate) 1 else try occupiedFill(g, input, n, lower, upper, width, gridDim(n, bucket_target, 1));
+    const dim = gridDim(n, bucket_target, fill);
+    const cells = dim * dim * dim;
     const scale = @as(f32, @floatFromInt(dim)) / width;
     const params = Params{ .n = capacity, .dim = dim, .reserved = (g.delaunay_mode & 2) | @as(u32, if (full) 4 else 0), .lower = .{ lower[0], lower[1], lower[2], 0 }, .upper = upper, .seeds = seeds, .scale = .{ scale, scale, scale, 0 } };
     var live = Live{ .n = capacity, .params = params, .cells = cells };
@@ -244,13 +274,36 @@ pub fn prepare(g: *gpu.Gpu, input: gpu.Buf, n: u32, capacity: u32, seeds: u32, l
     var sort_params = params;
     sort_params.n = n;
     const u = g.uniform(0, std.mem.asBytes(&sort_params));
-    g.dispatch(clear, (cells + 128) / 128, 1, 1, &.{ u, live.offsets.at(2) });
-    g.dispatch(count, (n + 127) / 128, 1, 1, &.{ u, input.at(1), live.offsets.at(2) });
+    g.dispatchFlat(clear, (cells + 128) / 128, 1, &.{ u, live.offsets.at(2) });
+    g.dispatchFlat(count, (n + 127) / 128, 1, &.{ u, input.at(1), live.offsets.at(2) });
     g.dispatch(prefix, 1, 1, 1, &.{ u, live.offsets.at(2), live.cursors.at(4) });
-    g.dispatch(scatter, (n + 127) / 128, 1, 1, &.{ u, input.at(1), live.coordinates.at(3), live.cursors.at(4) });
-    g.dispatch(order, (cells + 127) / 128, 1, 1, &.{ u, live.offsets.at(2), live.coordinates.at(3) });
-    g.dispatch(slot_map, (n + 127) / 128, 1, 1, &.{ u, live.coordinates.at(3), live.slots.at(5) });
+    g.dispatchFlat(scatter, (n + 127) / 128, 1, &.{ u, input.at(1), live.coordinates.at(3), live.cursors.at(4) });
+    g.dispatchFlat(order, (cells + 127) / 128, 1, &.{ u, live.offsets.at(2), live.coordinates.at(3) });
+    g.dispatchFlat(slot_map, (n + 127) / 128, 1, &.{ u, live.coordinates.at(3), live.slots.at(5) });
     return live;
+}
+
+fn gridDim(n: u32, bucket_target: f64, fill: f64) u32 {
+    return @intFromFloat(@max(1.0, @min(@round(std.math.cbrt(@as(f64, @floatFromInt(n)) / (bucket_target * fill))), 1024)));
+}
+/// The share of a dim^3 grid over the box that the n input sites occupy: counted on the GPU
+/// (gao_grid_count and gao_grid_prefix) with one small readback.
+fn occupiedFill(g: *gpu.Gpu, input: gpu.Buf, n: u32, lower: [3]f32, upper: [3]f32, width: f32, dim: u32) !f64 {
+    const cells = dim * dim * dim;
+    const scale = @as(f32, @floatFromInt(dim)) / width;
+    const params = Params{ .n = n, .dim = dim, .lower = .{ lower[0], lower[1], lower[2], 0 }, .upper = upper, .seeds = n, .scale = .{ scale, scale, scale, 0 } };
+    var offsets = g.storage((@as(u64, cells) + 1) * 4);
+    defer g.release(&offsets);
+    var cursors = g.storage((@as(u64, cells) + 1) * 4);
+    defer g.release(&cursors);
+    const u = g.uniform(0, std.mem.asBytes(&params));
+    g.dispatchFlat(try g.pipeline("gao/grid_clear", shaders.gao_grid, "gao_grid_clear"), (cells + 128) / 128, 1, &.{ u, offsets.at(2) });
+    g.dispatchFlat(try g.pipeline("gao/grid_count", shaders.gao_grid, "gao_grid_count"), (n + 127) / 128, 1, &.{ u, input.at(1), offsets.at(2) });
+    g.dispatch(try g.pipeline("gao/grid_prefix", shaders.gao_grid, "gao_grid_prefix"), 1, 1, 1, &.{ u, offsets.at(2), cursors.at(4) });
+    var occupied: [1]u32 = undefined;
+    g.read(cursors, @as(u64, cells) * 4, std.mem.asBytes(&occupied));
+    try check(g);
+    return @as(f64, @floatFromInt(occupied[0])) / @as(f64, @floatFromInt(cells));
 }
 
 /// The stars of a prepared triangulation (every slot of `live`), its output summary.
@@ -260,7 +313,7 @@ pub fn solve(g: *gpu.Gpu, live: *Live) !Built {
     const params = live.params;
     const u = g.uniform(0, std.mem.asBytes(&params));
     const main = try g.pipeline("gao/main", main_code, "gao_main");
-    g.dispatch(main, (n + 127) / 128, 1, 1, &.{ u, live.coordinates.at(1), live.offsets.at(2), live.triangles.at(3), live.indices.at(4), live.states.at(5) });
+    dispatchStars(g, main, params, n, false, &.{ u, live.coordinates.at(1), live.offsets.at(2), live.triangles.at(3), live.indices.at(4), live.states.at(5) });
     if (@import("builtin").target.os.tag != .freestanding and g.delaunay_mode & 2 != 0) {
         const diagnostic = try std.heap.page_allocator.alloc([4]u32, n);
         defer std.heap.page_allocator.free(diagnostic);
@@ -274,8 +327,10 @@ pub fn solve(g: *gpu.Gpu, live: *Live) !Built {
         }
         std.debug.print("Gao main status={any}; max nv/nt/cycles={any}\n", .{ counts, maximum });
     }
-    g.dispatchFlat(try g.pipeline("gao/post_filtered", filtered_post_code, "gao_post"), n, 1, &live.postBinds(g, &params));
-    g.dispatchFlat(try live.postPipe(g), n, 1, &live.postBinds(g, &params));
+    var filtered = params;
+    filtered.reserved |= filtered_bit;
+    dispatchStars(g, try live.postPipe(g), filtered, n, true, &live.postBinds(g, &filtered));
+    dispatchStars(g, try live.postPipe(g), params, n, true, &live.postBinds(g, &params));
     try live.summarize(g, &params);
     var stats: [24]u32 = undefined;
     var previous_cold: u64 = 0;
@@ -293,8 +348,8 @@ pub fn solve(g: *gpu.Gpu, live: *Live) !Built {
         rounds += 2;
         live.wide = true;
         g.clear(live.counters);
-        g.dispatch(main, (n + 127) / 128, 1, 1, &.{ u, live.coordinates.at(1), live.offsets.at(2), live.triangles.at(3), live.indices.at(4), live.states.at(5) });
-        g.dispatchFlat(try live.postPipe(g), n, 1, &live.postBinds(g, &params));
+        dispatchStars(g, main, params, n, false, &.{ u, live.coordinates.at(1), live.offsets.at(2), live.triangles.at(3), live.indices.at(4), live.states.at(5) });
+        dispatchStars(g, try live.postPipe(g), params, n, true, &live.postBinds(g, &params));
         try live.summarize(g, &params);
         g.read(live.counters, 0, std.mem.asBytes(&stats));
         try check(g);
@@ -318,7 +373,7 @@ pub fn solve(g: *gpu.Gpu, live: *Live) !Built {
         previous_cold += stats[7];
         rounds += 1;
         g.clear(live.counters);
-        g.dispatchFlat(try live.postPipe(g), n, 1, &live.postBinds(g, &params));
+        dispatchStars(g, try live.postPipe(g), params, n, true, &live.postBinds(g, &params));
         try live.summarize(g, &params);
         g.read(live.counters, 0, std.mem.asBytes(&stats));
         try check(g);

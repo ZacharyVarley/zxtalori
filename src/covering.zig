@@ -42,17 +42,22 @@ pub const Shell = struct {
         self.* = .{};
     }
 };
-pub const Result = struct { radius_deg: f64, domain_bound_deg: f64, witness: [4]f32, shell_points: u32, fence_points: u32 = 0, tetrahedra: u32, certificate_probes: u32, exact_predicates: u64, rounds: u32 };
+pub const Result = struct { radius_deg: f64, domain_bound_deg: f64, witness: [4]f32, shell_points: u32, fence_points: u32 = 0, tetrahedra: u32, certificate_probes: u32, exact_predicates: u64, rounds: u32, unresolved_caps: u32 = 0 };
 /// Fence band beyond the shell margin m, out to (1 + fence_width) m: real images that
 /// bound the empty spheres of outer shell sites without being DT seeds themselves.
-/// Omitted while the last Gao pass was degenerate (`Gpu.gao_degenerate`).
+/// Omitted for a lattice (`Gpu.gao_degenerate`: a transport grid, or a last Gao pass with many
+/// exact predicates) of fewer than `unfenced_below` orientations. Without it the outermost
+/// shell stars reach the regional guards, and their searches cross much of the grid: a first
+/// check of an I grid at 500k took 2.4 s unfenced, 0.19 s fenced. Only small lattices gain
+/// from omitting it (T transport h=8, 3,281 points: 78 ms against 428 ms, ten times the exact
+/// predicates); at 24k it is the other way round (1.9 s against 0.23 s).
 const fence_width = 0.5;
 /// `Gpu.delaunay_mode` bit that omits the fence (diagnostic comparison only).
 pub const no_fence: u32 = 1 << 20;
+const unfenced_below: u32 = 10000;
 const code = shaders.dt_common ++ shaders.dt_math ++ shaders.dt_double ++ shaders.covering;
 fn check(g: *gpu.Gpu) !void {
-    g.submit();
-    try g.dev.wait();
+    try g.wait();
     if (g.dev.takeError() != null) return error.CoveringGpuValidation;
 }
 fn unordered(key: u32) f32 {
@@ -149,7 +154,7 @@ pub const Live = struct {
         self.launch = g.storage(48);
         var by_slot = g.storage(@as(u64, self.capacity) * 4);
         const lp = self.liveParams();
-        g.dispatch(try g.pipeline("live/adopt", shaders.live, "live_adopt"), (self.capacity + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&lp)), self.gao.coordinates.at(2), self.origin.at(16), by_slot.at(17), self.links.at(18), self.scratch.at(19) });
+        g.dispatchFlat(try g.pipeline("live/adopt", shaders.live, "live_adopt"), (self.capacity + 127) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(&lp)), self.gao.coordinates.at(2), self.origin.at(16), by_slot.at(17), self.links.at(18), self.scratch.at(19) });
         g.release(&self.origin);
         self.origin = by_slot;
         self.listed = true;
@@ -175,7 +180,7 @@ pub const Live = struct {
     pub fn caps(self: *Live, a: A, g: *gpu.Gpu, core: gpu.Buf, operations: gpu.Buf, mesh: ?*Mesh, rows: ?Rows, local: ?Local) !Result {
         // Fresh cap results; words 11 and 12 keep the certificate.
         g.writeSlice(self.info, 8 * 4, u32, &[_]u32{ 0, 0xffffffff, 0 });
-        g.writeSlice(self.info, 14 * 4, u32, &[_]u32{ @bitCast(@as(f32, 4)), 0, 0, 0, 0, 0 });
+        g.writeSlice(self.info, 14 * 4, u32, &[_]u32{ @bitCast(@as(f32, 4)), 0, 0, 0, 0, 0, 0, 0 });
         var tets = try self.gao.emit(g, self.tets);
         defer g.release(&tets);
         var params = self.capParams();
@@ -184,13 +189,13 @@ pub const Live = struct {
         const cap_kernel = try g.pipeline("cover/caps", code, "circumcaps");
         const choose = try g.pipeline("cover/select", code, "select_cap");
         const witness_kernel = try g.pipeline("cover/witness", code, "check_witness");
-        g.dispatch(cap_kernel, (self.tets + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), self.points().at(1), tets.at(10), operations.at(12), caps_buf.at(13), self.info.at(14) });
-        g.dispatch(choose, (self.tets + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), caps_buf.at(13), self.info.at(14) });
-        g.dispatch(witness_kernel, (self.n * self.order + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), operations.at(12), caps_buf.at(13), self.info.at(14), core.at(15) });
+        g.dispatchFlat(cap_kernel, (self.tets + 127) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), self.points().at(1), tets.at(10), operations.at(12), caps_buf.at(13), self.info.at(14) });
+        g.dispatchFlat(choose, (self.tets + 127) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), caps_buf.at(13), self.info.at(14) });
+        g.dispatchFlat(witness_kernel, (self.n * self.order + 127) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), operations.at(12), caps_buf.at(13), self.info.at(14), core.at(15) });
         if (local) |out| {
             g.ensure(out.buf, @as(u64, self.n) * 8);
             g.clearRange(out.buf.*, 0, @as(u64, self.n) * 8);
-            g.dispatch(try g.pipeline("cover/local", code, "local_caps"), (self.tets + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), tets.at(10), caps_buf.at(13), self.origin.at(16), out.buf.at(19) });
+            g.dispatchFlat(try g.pipeline("cover/local", code, "local_caps"), (self.tets + 127) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), tets.at(10), caps_buf.at(13), self.origin.at(16), out.buf.at(19) });
             g.read(out.buf.*, 0, std.mem.sliceAsBytes(out.host[0 .. 2 * self.n]));
         }
         // Cap rows need only GPU-side results, so they are built before the one readback.
@@ -206,7 +211,7 @@ pub const Live = struct {
             var row_params = params;
             row_params.scale[3] = request.band;
             const row_kernel = try g.pipeline("cover/rows", code, "cap_rows_kernel");
-            g.dispatch(row_kernel, (self.tets + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&row_params)), tets.at(10), operations.at(12), caps_buf.at(13), self.info.at(14), core.at(15), self.origin.at(16), out.at(17), counter.at(18) });
+            g.dispatchFlat(row_kernel, (self.tets + 127) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(&row_params)), tets.at(10), operations.at(12), caps_buf.at(13), self.info.at(14), core.at(15), self.origin.at(16), out.at(17), counter.at(18) });
             g.read(counter, 0, std.mem.asBytes(&found));
         }
         var state: [24]u32 = undefined;
@@ -220,6 +225,9 @@ pub const Live = struct {
         const chord2: f32 = @bitCast(state[14]);
         const radius = 2 * std.math.asin(@min(1, @sqrt(@as(f64, chord2)) * 0.5));
         if (@abs(radius - proposed) > 3e-6) return error.CoveringWitnessMismatch;
+        // A cap the circumcap pass could not resolve, possibly the largest: no valid result.
+        const unresolved: f32 = @bitCast(state[21]);
+        if (state[20] != 0 and !(unresolved < proposed - 3e-6)) return error.UnresolvedCircumcap;
         if (rows) |request| {
             request.count.* = found[0];
             g.release(request.keep);
@@ -232,10 +240,10 @@ pub const Live = struct {
                     // The slots' grid at their current positions (free slots unlisted).
                     kept.index = g.storage((cells + 2 * @as(u64, self.capacity)) * 4);
                     const lp = self.liveParams();
-                    g.dispatch(try g.pipeline("live/index_clear", shaders.live, "live_index_clear"), @intCast((cells + 127) / 128), 1, 1, &.{ g.uniform(0, std.mem.asBytes(&lp)), kept.index.at(20) });
-                    g.dispatch(try g.pipeline("live/index", shaders.live, "live_index"), (self.capacity + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&lp)), self.gao.coordinates.at(2), self.origin.at(17), kept.index.at(20) });
+                    g.dispatchFlat(try g.pipeline("live/index_clear", shaders.live, "live_index_clear"), @intCast((cells + 127) / 128), 1, &.{ g.uniform(0, std.mem.asBytes(&lp)), kept.index.at(20) });
+                    g.dispatchFlat(try g.pipeline("live/index", shaders.live, "live_index"), (self.capacity + 127) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(&lp)), self.gao.coordinates.at(2), self.origin.at(17), kept.index.at(20) });
                     kept.* = .{ .index = kept.index, .count = self.capacity, .dim = self.dim, .lower = self.lower, .scale = self.scale, .margin = self.margin };
-                    return .{ .radius_deg = radius * 360 / std.math.pi, .domain_bound_deg = self.margin * 360 / std.math.pi, .witness = witness, .shell_points = self.count, .fence_points = self.fence, .tetrahedra = self.tets, .certificate_probes = state[12], .exact_predicates = self.cold, .rounds = self.rounds };
+                    return .{ .radius_deg = radius * 360 / std.math.pi, .domain_bound_deg = self.margin * 360 / std.math.pi, .witness = witness, .shell_points = self.count, .fence_points = self.fence, .tetrahedra = self.tets, .certificate_probes = state[12], .exact_predicates = self.cold, .rounds = self.rounds, .unresolved_caps = state[20] };
                 }
                 kept.sites = g.storage(@as(u64, self.count) * 16);
                 g.copy(self.sites, 0, kept.sites, 0, @as(u64, self.count) * 16);
@@ -264,7 +272,7 @@ pub const Live = struct {
             destination.deinit(a);
             destination.* = .{ .vertices = vertices, .tets = mesh_tets };
         }
-        return .{ .radius_deg = radius * 360 / std.math.pi, .domain_bound_deg = self.margin * 360 / std.math.pi, .witness = witness, .shell_points = self.count, .fence_points = self.fence, .tetrahedra = self.tets, .certificate_probes = state[12], .exact_predicates = self.cold, .rounds = self.rounds };
+        return .{ .radius_deg = radius * 360 / std.math.pi, .domain_bound_deg = self.margin * 360 / std.math.pi, .witness = witness, .shell_points = self.count, .fence_points = self.fence, .tetrahedra = self.tets, .certificate_probes = state[12], .exact_predicates = self.cold, .rounds = self.rounds, .unresolved_caps = state[20] };
     }
 
     /// Updates the triangulation for the sources `moved` flags (one u32 per source), now
@@ -285,7 +293,7 @@ pub const Live = struct {
         const shell_params = Params{ .n = self.n, .seeds = self.capacity, .first = self.order, .cap = @intCast(self.halfspaces.size / 16), .dim = @intFromBool(self.fenced), .lower = .{ @floatCast(@sin(self.margin)), @floatCast(@sin(self.fence_margin)), self.box_lower[0], self.box_lower[1] }, .scale = .{ self.box_lower[2], self.box_upper[0], self.box_upper[1], self.box_upper[2] } };
         g.ensure(&self.moved, (@as(u64, self.n) + 1) * 4);
         g.clearRange(self.moved, 0, 4);
-        g.dispatch(try g.pipeline("live/moved", shaders.live, "live_moved"), (self.n + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&lp)), moved.at(21), self.moved.at(22) });
+        g.dispatchFlat(try g.pipeline("live/moved", shaders.live, "live_moved"), (self.n + 127) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(&lp)), moved.at(21), self.moved.at(22) });
         g.dispatch(try g.pipeline("live/launch_moved", shaders.live, "live_launch_moved"), 1, 1, 1, &.{ self.launch.at(11), self.moved.at(22) });
         g.submit();
         g.dispatchIndirect(try g.pipeline("cover/live_images", shaders.shell, "shell_live_images"), self.launch, 32, &.{ g.uniform(0, std.mem.asBytes(&shell_params)), self.halfspaces.at(11), operations.at(12), core.at(15), self.moved.at(18), self.gao.coordinates.at(21), self.origin.at(22), self.links.at(23), self.scratch.at(24) });
@@ -328,13 +336,13 @@ pub const Live = struct {
     /// validating live updates against a new build.
     pub fn capSet(self: *Live, a: A, g: *gpu.Gpu, operations: gpu.Buf) ![]CapKey {
         g.writeSlice(self.info, 8 * 4, u32, &[_]u32{ 0, 0xffffffff, 0 });
-        g.writeSlice(self.info, 14 * 4, u32, &[_]u32{ @bitCast(@as(f32, 4)), 0, 0, 0, 0, 0 });
+        g.writeSlice(self.info, 14 * 4, u32, &[_]u32{ @bitCast(@as(f32, 4)), 0, 0, 0, 0, 0, 0, 0 });
         var tets = try self.gao.emit(g, self.tets);
         defer g.release(&tets);
         var params = self.capParams();
         var caps_buf = g.storage(@as(u64, self.tets) * 32);
         defer g.release(&caps_buf);
-        g.dispatch(try g.pipeline("cover/caps", code, "circumcaps"), (self.tets + 127) / 128, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), self.points().at(1), tets.at(10), operations.at(12), caps_buf.at(13), self.info.at(14) });
+        g.dispatchFlat(try g.pipeline("cover/caps", code, "circumcaps"), (self.tets + 127) / 128, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), self.points().at(1), tets.at(10), operations.at(12), caps_buf.at(13), self.info.at(14) });
         const t = try a.alloc([4]u32, self.tets);
         defer a.free(t);
         const c = try a.alloc([8]f32, self.tets);
@@ -385,6 +393,27 @@ pub fn zonePlanes(a: A, group: groups.Group) !std.ArrayList([4]f32) {
         try planes.append(a, value);
     };
     return planes;
+}
+
+/// Bytes of the shell pass's rim buffer for n sources (shell.wgsl).
+pub fn rimBytes(n: u32) u64 {
+    return (4 + (@as(u64, n) + 127) / 128 + n) * 4;
+}
+pub const ShellBuffers = struct { sites: gpu.Buf, halfspaces: gpu.Buf, ops: gpu.Buf, info: gpu.Buf, core: gpu.Buf, origin: gpu.Buf, blocks: gpu.Buf, rim: gpu.Buf };
+/// The shell pass (shell.wgsl) over n sources, `params` the ShellParams bytes: the sources
+/// near the zone's boundary are listed (the rim) and the core sites written, then only the
+/// rim's images are classified, in indirect dispatches the rim sizes. Most sources lie farther
+/// inside the zone than the band, and none of their images is in it: classifying all 2|K|n
+/// images took 55 ms of a first check of an I grid at 500k. `blocks` holds 8 bytes per 128
+/// images, `rim` rimBytes(n).
+pub fn shellPass(g: *gpu.Gpu, params: []const u8, n: u32, b: ShellBuffers) !void {
+    const u = g.uniform(0, params);
+    g.dispatchFlat(try g.pipeline("cover/shell_rim_count", shaders.shell, "shell_rim_count"), (n + 127) / 128, 1, &.{ u, b.halfspaces.at(11), b.core.at(15), b.rim.at(25) });
+    g.dispatch(try g.pipeline("cover/shell_rim_scan", shaders.shell, "shell_rim_scan"), 1, 1, 1, &.{ u, b.rim.at(25) });
+    g.dispatchFlat(try g.pipeline("cover/shell_rim_build", shaders.shell, "shell_rim_build"), (n + 127) / 128, 1, &.{ u, b.sites.at(1), b.halfspaces.at(11), b.ops.at(12), b.info.at(14), b.core.at(15), b.origin.at(16), b.rim.at(25) });
+    g.dispatchIndirect(try g.pipeline("cover/shell_count", shaders.shell, "shell_count"), b.rim, 0, &.{ u, b.halfspaces.at(11), b.ops.at(12), b.core.at(15), b.blocks.at(17), b.rim.at(26) });
+    g.dispatch(try g.pipeline("cover/shell_scan", shaders.shell, "shell_scan"), 1, 1, 1, &.{ u, b.info.at(14), b.blocks.at(17), b.rim.at(26) });
+    g.dispatchIndirect(try g.pipeline("cover/shell", shaders.shell, "shell_build"), b.rim, 0, &.{ u, b.sites.at(1), b.halfspaces.at(11), b.ops.at(12), b.info.at(14), b.core.at(15), b.origin.at(16), b.blocks.at(17), b.rim.at(26) });
 }
 
 /// The shell's images (no fence) at `margin`: of every source, or with `moved` only of
@@ -446,6 +475,8 @@ pub fn build(a: A, g: *gpu.Gpu, core: gpu.Buf, n: u32, operations: gpu.Buf, grou
     live.info = g.storage(24 * 4);
     var blocks: gpu.Buf = .{};
     defer g.release(&blocks);
+    var rim = g.storage(rimBytes(n));
+    defer g.release(&rim);
     const margin = margin_in;
     var capacity: u32 = @max(n + 4, n * @min(order * 2, 8));
     for (0..4) |_| {
@@ -459,17 +490,12 @@ pub fn build(a: A, g: *gpu.Gpu, core: gpu.Buf, n: u32, operations: gpu.Buf, grou
         // Same 64-byte layout as ShellParams (n,capacity,order,planes,fence,...).
         // On lattice-like input the fence's co-spherical images add exact predicates
         // (T h=8: 14k against 1.3k), costing more than its shorter searches save.
-        const fenced = g.delaunay_mode & no_fence == 0 and !g.gao_degenerate;
+        const fenced = g.delaunay_mode & no_fence == 0 and !(g.gao_degenerate and n < unfenced_below);
         const fence_margin = @min(1.569, margin * (1 + fence_width));
         const shell_params = Params{ .n = n, .seeds = capacity, .first = order, .cap = @intCast(planes.items.len), .dim = @intFromBool(fenced), .lower = .{ @floatCast(@sin(margin)), @floatCast(@sin(fence_margin)), 0, 0 } };
-        const shell_count = try g.pipeline("cover/shell_count", shaders.shell, "shell_count");
-        const shell_scan = try g.pipeline("cover/shell_scan", shaders.shell, "shell_scan");
-        const shell = try g.pipeline("cover/shell", shaders.shell, "shell_build");
         const shape = gpu.Gpu.flat((n * order * 2 + 127) / 128);
         g.ensure(&blocks, @as(u64, shape[0]) * shape[1] * 8);
-        g.dispatch(shell_count, shape[0], shape[1], 1, &.{ g.uniform(0, std.mem.asBytes(&shell_params)), live.halfspaces.at(11), operations.at(12), core.at(15), blocks.at(17) });
-        g.dispatch(shell_scan, 1, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&shell_params)), live.info.at(14), blocks.at(17) });
-        g.dispatch(shell, shape[0], shape[1], 1, &.{ g.uniform(0, std.mem.asBytes(&shell_params)), live.sites.at(1), live.halfspaces.at(11), operations.at(12), live.info.at(14), core.at(15), live.origin.at(16), blocks.at(17) });
+        try shellPass(g, std.mem.asBytes(&shell_params), n, .{ .sites = live.sites, .halfspaces = live.halfspaces, .ops = operations, .info = live.info, .core = core, .origin = live.origin, .blocks = blocks, .rim = rim });
         g.read(live.info, 0, std.mem.asBytes(&state));
         try check(g);
         if (state[1] != 0) {
@@ -491,13 +517,25 @@ pub fn build(a: A, g: *gpu.Gpu, core: gpu.Buf, n: u32, operations: gpu.Buf, grou
         const subdivisions: u32 = @intFromFloat(@max(4, @ceil(@sqrt(@as(f64, 3)) / (0.4 * margin))));
         if (subdivisions > 512) return error.CoveringCertificateTooLarge;
         live.subdivisions = subdivisions;
-        const params = live.capParams();
-        const probes = 4 * (subdivisions + 1) * (subdivisions + 1) * (subdivisions + 1);
+        // Chart vertices nearest the zone's points: within half a step (1/m) of its box.
+        var params = live.capParams();
+        const reach = groups.chartReach(group);
+        const first: u32 = if (reach) |t| @intFromFloat(@max(0, @floor((1 - t) * @as(f64, @floatFromInt(subdivisions)) / 2) - 1)) else 0;
+        const charts: u32 = if (reach == null) 4 else 1;
+        params.lower[3] = @bitCast(first);
+        params.scale[3] = @floatFromInt(charts);
+        const side = subdivisions + 1 - 2 * first;
+        const probes = charts * side * side * side;
         const certificate = try g.pipeline("cover/certificate", code, "certify_shell");
         const probe_shape = gpu.Gpu.flat((probes + 127) / 128);
         g.dispatch(certificate, probe_shape[0], probe_shape[1], 1, &.{ g.uniform(0, std.mem.asBytes(&params)), live.sites.at(1), live.heads.at(2), live.next.at(3), live.halfspaces.at(11), operations.at(12), live.info.at(14) });
-        // The certificate's verdict is read with the caps (Live.caps), not on its own. A
-        // triangulation that fails on a shell that fails the certificate also asks for a
+        // The verdict comes first: a margin the certificate rejects costs the shell and the
+        // probes, not a whole triangulation (random samples often need a wider one).
+        var verdict: [2]u32 = undefined;
+        g.read(live.info, 11 * 4, std.mem.asBytes(&verdict));
+        try check(g);
+        if (verdict[0] != 0) return error.CertificateFailed;
+        // A triangulation that fails on a shell that fails the certificate also asks for a
         // wider margin.
         const built = (if (full) live.buildLive(g, fenced, fence_margin, margin) else gao_dt.build(g, live.sites, live.count + live.fence, live.count, live.lower, live.upper, margin, false)) catch |err| {
             g.read(live.info, 0, std.mem.asBytes(&state));

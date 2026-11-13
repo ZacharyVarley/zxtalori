@@ -156,9 +156,15 @@ edges, optionally including halo images or transformed copies over SO(3).
 These are projected endpoint segments; seam-spanning segments are suppressed,
 not an exported curved-edge finite-element mesh. Drawing budgets do not alter
 the triangulation. A move invalidates the displayed DT until refreshed.
-Point radius, wire width, automatic rotation about sample/world Z, symmetry
-operator colors, and six origin halfspace cuts are independent plot controls.
-Cuts clip edge segments at the origin plane before camera rotation. History
+Point radius, wire width, automatic rotation about sample/world Z and symmetry
+operator colors are independent plot controls. The plot's own controls sit
+over its sides: zone or SO(3), the projection, a cut and the boundary toggle
+down the left, the colour key down the right as an upright bar, low at the
+bottom. A plot without room beside it (narrower than 1.35 times its height, or
+under 640 px) puts them in a row under the title and the key, horizontal, along
+the bottom. The cut is a plane normal to x, y or z, moved along its axis by a
+slider (double-click centres it) with a button for the side kept; it hides points
+and clips edge segments before camera rotation. History
 plots any number of covering, mesh ratio, excess, separation, energy and ratio
 measures at once. Chips and the measure tiles toggle series, and the choice is
 remembered. Each series is scaled to its own range, so measures with different
@@ -171,9 +177,31 @@ checks (shell, fence and exact-predicate counts), relaxation and optimization
 runs, stops and failures. The central pane spans the full height; the GPU chip
 sits at the bottom right.
 
-The sidebar has two tabs, Instantiate and Optimize. The identity toggles act on
+Rendering is automatic (Display: Rendering). Up to 150,000 orbit images are
+splatted on the CPU as before; up to 2 million draw as depth-tested GPU discs
+shaded the same way; beyond that, or for SO(3) views of large samples, every
+image adds to its pixel in a density image, its brightness the log of the count
+relative to the busiest pixel. Coloured by a measure, a density pixel shows the
+mean value along its line of sight. Shaders project the stored representatives
+and operators directly, so nothing is expanded on the CPU: a frame of 237
+million images takes about 7 ms on the development GPU, 10 million discs about
+9 ms. Picking runs the same projection on the GPU. Measures default to a
+relative scale, a blue–grey–red ramp centred on the median and out to the
+farther of the 1st and 99th percentiles, so uniform regions read neutral and
+crowded or sparse ones stand out; Range keeps the percentile ramp. The legend
+holds the colour choice, the values' histogram and their coefficient of
+variation (CV); under Objective it also names the measure chosen. Counts
+(Voronoi faces) get one bar per value instead of a histogram over the ramp. Samples over 10,000 orientations get the linear spacing pass after
+generation and runs, instead of the pair energies.
+
+The sidebar has two tabs, Instantiate and Optimize; Generate opens Optimize. The
+covering objectives show the plateau kicks (`optimize_covering`'s patience,
+plateau_gain, kick and kick_trust, in percent). Covering updates read Manual,
+locked, while Automatic would not check the sample (its estimated check time).
+The identity toggles act on
 the sample at once; turning Identity off removes only a point the toggle added.
-The Auto objective runs repulsion, then covering, each limited by Steps.
+The objectives read Auto, Repulsion, Covering, and Auto is the default (5,000
+steps). The Auto objective runs repulsion, then covering, each limited by Steps.
 Repulsion ends when the lowest energy gains under 1e-9 per step, relative, over
 two windows of 100 steps in a row, since Barzilai–Borwein steps spike and
 recover. Covering is judged only at the engine's kicks, which come once a descent

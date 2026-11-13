@@ -44,7 +44,8 @@ fn gao_ballsearch(ids:vec3<u32>)->GaoSearch{
     return GaoSearch(GAO_NONE,trusted);
 }
 @compute @workgroup_size(128)
-fn gao_main(@builtin(global_invocation_id) id:vec3<u32>){
+// Stars from lower.w (u32 bits) on: the host dispatches the stars in slices.
+fn gao_main(@builtin(global_invocation_id) id_grid:vec3<u32>,@builtin(num_workgroups) id_groups:vec3<u32>){let id=vec3<u32>(id_grid.x+id_grid.y*id_groups.x*128u+bitcast<u32>(p.lower.w),0u,0u);
     if(id.x>=p.n){return;}
     if(p.scale.w>0.5&&gao_states[id.x].x!=GAO_PENDING){return;}
     if(coordinates[id.x].w>=p.seeds){gao_states[id.x]=vec4<u32>(0u);return;}

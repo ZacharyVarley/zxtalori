@@ -20,6 +20,9 @@ def test_optimizer_lowers_covering_and_keeps_zone(group,mode):
         assert len(grid)==300
         assert stats['covering_current']
         assert stats['covering_radius_deg']<before
+        # Only the covering radius is measured: energy and separation wait for measure().
+        assert stats['measures_current'] is False
+        assert grid.measure()['measures_current']
         # The engine keeps the best sample it saw, so the result is that sample.
         assert stats['covering_radius_deg']==pytest.approx(stats['covering_optimizer_best_deg'],abs=1e-5)
         assert np.max(np.abs(np.linalg.norm(grid.quaternions,axis=1)-1))<1e-5
@@ -85,3 +88,16 @@ def test_separation_floor_holds_through_kicks():
         assert grid.stats['covering_optimizer_kicks']>0
         assert grid.stats['covering_radius_deg']<start
         assert grid.measure()['separation_deg']>=floor*(1-1e-5)
+
+
+def test_kick_settings():
+    with zxtalori.haar('O',count=300,seed=4) as grid:
+        grid.relax(20)
+        grid.optimize_covering(60,patience=5,plateau_gain=0.5,kick=0.1,kick_trust=0.05)
+        stats=grid.stats
+        assert stats['covering_kick_settings']==pytest.approx({'patience':5,'progress':0.5,'size':0.1,'trust':0.05})
+        # A gain of 50% is never reached, so the descent kicks every five steps.
+        assert stats['covering_optimizer_kicks']>=10
+        for bad in ({'patience':0},{'plateau_gain':1},{'kick':2},{'kick_trust':0}):
+            with pytest.raises(ValueError):
+                grid.optimize_covering(1,**bad)

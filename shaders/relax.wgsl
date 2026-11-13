@@ -27,8 +27,10 @@ var<workgroup> reduce_b: array<f32, 64>;
 fn finite3(v: vec3<f32>) -> bool { return all(v == v) && all(abs(v) <= vec3<f32>(3.4e38)); }
 
 @compute @workgroup_size(64)
-fn relax_stats(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) lane: u32, @builtin(workgroup_id) wid: vec3<u32>) {
-    let i = gid.x;
+fn relax_stats(@builtin(global_invocation_id) gid_grid: vec3<u32>, @builtin(local_invocation_index) lane: u32, @builtin(workgroup_id) wid_grid: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
+    let wid = vec3<u32>(wid_grid.x + wid_grid.y * groups.x, 0u, 0u);
+    if (wid.x >= u.partials) { return; }
+    let i = wid.x * 64u + lane;
     var dots = vec4<f32>(0.0); var energy = 0.0;
     let first = atomicLoad(&state[ITERATION]) == 0u;
     if (i < u.n) {
@@ -138,7 +140,7 @@ fn qmul(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
 // Curvature-scaled BB move, clipped to half the mean neighbour radius, applied as a left
 // rotation exp(d) q. A held identity stays exactly (1,0,0,0). After a flagged step nothing moves.
 @compute @workgroup_size(64)
-fn relax_move(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn relax_move(@builtin(global_invocation_id) gid_grid: vec3<u32>, @builtin(num_workgroups) gid_groups: vec3<u32>) {let gid=vec3<u32>(gid_grid.x+gid_grid.y*gid_groups.x*64u,0u,0u);
     let i = gid.x;
     if (i >= u.n || atomicLoad(&state[FLAGS]) != 0u) { return; }
     if (i + 1u == u.fixed) {

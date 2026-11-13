@@ -8,6 +8,11 @@ struct ShellParams{n:u32,capacity:u32,order:u32,planes:u32,fence:u32,zero:u32,pa
 @group(0) @binding(15) var<storage,read> core:array<vec4<f32>>;
 @group(0) @binding(16) var<storage,read_write> origin:array<u32>; // source + n*(2*op+negative)
 @group(0) @binding(17) var<storage,read_write> blocks:array<u32>; // per workgroup: shell, fence
+// The rim (see on_rim): words 0..2 the image passes' workgroups, 3 the source count m,
+// then a word per block of 128 sources, then the m sources. Bound twice: written by the
+// rim passes, read beside its use as the image passes' indirect dispatch.
+@group(0) @binding(25) var<storage,read_write> rim_out:array<u32>;
+@group(0) @binding(26) var<storage,read> rim_in:array<u32>;
 fn mul(a:vec4<f32>,b:vec4<f32>)->vec4<f32>{return vec4<f32>(a.x*b.x-dot(a.yzw,b.yzw),a.x*b.yzw+b.x*a.yzw+cross(a.yzw,b.yzw));}
 fn ordered(x:f32)->u32{let bits=bitcast<u32>(x);return select(bits^0x80000000u,~bits,(bits>>31u)!=0u);}
 // Images within the halfspace margin s of the FZ, of sources near its boundary.
@@ -44,16 +49,61 @@ fn block_prefix(lane:u32,value:u32)->u32{
     return scan[lane]-value;
 }
 fn packed(kind:u32)->u32{return select(0u,1u,kind==2u)|select(0u,1u<<16u,kind==3u);}
+// The rim: sources nearer a zone plane than the widest band. No image of any other source lies
+// in a band (an image of a source in the zone is in another copy of the zone, at least the
+// source's distance to the zone's boundary away), and near_zone's first test rejects them.
+fn rim_blocks()->u32{return (u.n+127u)/128u;}
+fn on_rim(source:u32)->bool{
+    let original=normalize(core[source]);let s=select(u.config.x,max(u.config.x,u.config.y),u.fence!=0u);
+    for(var k=0u;k<u.planes;k++){if(dot(original,halfspaces[k])<=s+2e-6){return true;}}return false;
+}
+// The image index (source + n*image) of rim item t = rank + m*image; past every image for t >= 2m|K|.
+// The rim is listed in source order, so the image passes keep image-index order.
+fn rim_image(t:u32)->u32{
+    let m=rim_in[3];if(t>=m*u.order*2u){return u.n*u.order*2u;}
+    return rim_in[4u+rim_blocks()+t%m]+u.n*(t/m);
+}
+@compute @workgroup_size(128)
+fn shell_rim_count(@builtin(global_invocation_id) id:vec3<u32>,@builtin(local_invocation_index) lane:u32,@builtin(workgroup_id) group:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
+    let source=id.x+id.y*groups.x*128u;let block=group.x+group.y*groups.x;
+    var flag=0u;if(source<u.n&&on_rim(source)){flag=1u;}let before=block_prefix(lane,flag);
+    if(lane==127u&&block<rim_blocks()){rim_out[4u+block]=before+flag;}
+}
+// One workgroup: block counts become offsets; m and the image passes' workgroups (as Gpu.flat).
+@compute @workgroup_size(128)
+fn shell_rim_scan(@builtin(local_invocation_index) lane:u32){
+    let count=rim_blocks();let width=(count+127u)/128u;
+    let begin=min(lane*width,count);let end=min(begin+width,count);
+    var total=0u;for(var b=begin;b<end;b++){total+=rim_out[4u+b];}
+    let at=block_prefix(lane,total);
+    var next=at;for(var b=begin;b<end;b++){let c=rim_out[4u+b];rim_out[4u+b]=next;next+=c;}
+    if(lane==127u){
+        let m=at+total;let blocks=(m*u.order*2u+127u)/128u;let x=clamp(blocks,1u,65535u);
+        rim_out[0]=x;rim_out[1]=(blocks+x-1u)/x;rim_out[2]=1u;rim_out[3]=m;
+    }
+}
+// Lists the rim and writes the core sites, each at its source index.
+@compute @workgroup_size(128)
+fn shell_rim_build(@builtin(global_invocation_id) id:vec3<u32>,@builtin(local_invocation_index) lane:u32,@builtin(workgroup_id) group:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
+    let source=id.x+id.y*groups.x*128u;let block=group.x+group.y*groups.x;
+    var flag=0u;if(source<u.n&&on_rim(source)){flag=1u;}let before=block_prefix(lane,flag);
+    if(source>=u.n){return;}
+    if(flag!=0u){rim_out[4u+rim_blocks()+rim_out[4u+block]+before]=source;}
+    let image=classify(source);if(image.kind!=1u){return;}
+    if(source>=u.capacity){atomicStore(&info[1],1u);return;}
+    let q=image.q;let position=q.yzw/(1.0+q.x);sites[source]=vec4<f32>(position,0.0);origin[source]=source;
+    for(var k=0u;k<3u;k++){atomicMin(&info[2u+k],ordered(position[k]));atomicMax(&info[5u+k],ordered(position[k]));}
+}
 @compute @workgroup_size(128)
 fn shell_count(@builtin(global_invocation_id) id:vec3<u32>,@builtin(local_invocation_index) lane:u32,@builtin(workgroup_id) group:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
-    let index=id.x+id.y*groups.x*128u;let block=group.x+group.y*groups.x;
+    let index=rim_image(id.x+id.y*groups.x*128u);let block=group.x+group.y*groups.x;
     let kind=classify(index).kind;let before=block_prefix(lane,packed(kind));
     if(lane==127u){let total=before+packed(kind);blocks[2u*block]=total&0xffffu;blocks[2u*block+1u]=total>>16u;}
 }
 // One workgroup: block counts become exclusive offsets; info[0] = n + shell, info[13] = fence.
 @compute @workgroup_size(128)
 fn shell_scan(@builtin(local_invocation_index) lane:u32){
-    let count=(u.n*u.order*2u+127u)/128u;let width=(count+127u)/128u;
+    let count=(rim_in[3]*u.order*2u+127u)/128u;let width=(count+127u)/128u;
     let begin=min(lane*width,count);let end=min(begin+width,count);
     var shell=0u;var fence=0u;for(var b=begin;b<end;b++){shell+=blocks[2u*b];fence+=blocks[2u*b+1u];}
     scan[lane]=shell;scan_fence[lane]=fence;workgroupBarrier();
@@ -65,13 +115,13 @@ fn shell_scan(@builtin(local_invocation_index) lane:u32){
     for(var b=begin;b<end;b++){let s=blocks[2u*b];let f=blocks[2u*b+1u];blocks[2u*b]=at;blocks[2u*b+1u]=at_fence;at+=s;at_fence+=f;}
     if(lane==127u){atomicStore(&info[0],u.n+scan[127]);atomicStore(&info[13],scan_fence[127]);}
 }
-// Core sites keep their source index; shell sites follow from n, then the fence.
+// Shell sites follow the core from n, then the fence (core sites: shell_rim_build).
 @compute @workgroup_size(128)
 fn shell_build(@builtin(global_invocation_id) id:vec3<u32>,@builtin(local_invocation_index) lane:u32,@builtin(workgroup_id) group:vec3<u32>,@builtin(num_workgroups) groups:vec3<u32>){
-    let index=id.x+id.y*groups.x*128u;let block=group.x+group.y*groups.x;
+    let index=rim_image(id.x+id.y*groups.x*128u);let block=group.x+group.y*groups.x;
     let image=classify(index);let before=block_prefix(lane,packed(image.kind));
-    if(image.kind==0u){return;}
-    var at=index;
+    if(image.kind<2u){return;}
+    var at=0u;
     if(image.kind==2u){at=u.n+blocks[2u*block]+(before&0xffffu);}
     else if(image.kind==3u){at=atomicLoad(&info[0])+blocks[2u*block+1u]+(before>>16u);}
     if(at>=u.capacity){atomicStore(&info[1],1u);return;}

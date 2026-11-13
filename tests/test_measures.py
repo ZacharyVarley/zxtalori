@@ -112,3 +112,14 @@ def test_import_scale_invariance():
 
 
 if __name__=='__main__':main()
+
+
+def test_spacing_matches_all_pairs():
+    # The near-field nearest neighbours (above 20,000 orientations) and the all-pairs ones.
+    with zo.haar("O", 60000, 3) as grid:
+        spacing = grid.spacing()
+        near = grid.point_values("separation").copy()
+        assert spacing["quey_energy"] is None and "energy not measured" in spacing["precision"]
+        grid.measure()
+        assert np.abs(near - grid.point_values("separation")).max() < 1e-5
+        assert abs(spacing["separation_deg"] - grid.stats["separation_deg"]) < 1e-5

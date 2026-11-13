@@ -18,6 +18,10 @@ var<workgroup> gao_post_candidates:array<u32,POST_LANES>;
 var<workgroup> gao_post_distances:array<f32,POST_LANES>;
 var<workgroup> gao_post_remove:array<u32,GAO_MAX_T>;
 var<workgroup> gao_post_cold:array<u32,POST_LANES>;
+var<workgroup> gao_post_found:u32;
+// Searches over more cells than this grow from the range start (see gao_post).
+const POST_STAGED=512;
+const POST_FIRST_REACH=2;
 var<private> gao_search_tests:u32;
 var<private> gao_classification_tests:u32;
 var<private> gao_search_queries:u32;
@@ -52,17 +56,17 @@ fn gao_halfspace_post(id:u32){
 }
 @compute @workgroup_size(POST_LANES)
 fn gao_post(@builtin(workgroup_id) wid:vec3<u32>,@builtin(num_workgroups) grid:vec3<u32>,@builtin(local_invocation_index) lane:u32){
-    let seed=wid.x+wid.y*grid.x;
+    let seed=wid.x+wid.y*grid.x+bitcast<u32>(p.lower.w); // slices start at lower.w (u32 bits)
     if(seed>=p.n){return;}gao_seed=seed;gao_lane=lane;gao_full=(p.reserved&GAO_FULL)!=0u;let state=gao_states[gao_seed];
     if(lane==0u){
         gao_post_meta.z=state.x;
         // A filtered pass can exhaust this same 64-vertex capacity. Preserve
         // its complete pending mesh for the larger retry instead of attempting
         // a second update in the already-exhausted buffer.
-        if(!GAO_FILTERED_ONLY&&state.x==6u){gao_states[gao_seed].x=1u;}
+        if(!gao_filtered_only()&&state.x==6u){gao_states[gao_seed].x=1u;}
     }
     workgroupBarrier();let incoming=workgroupUniformLoad(&gao_post_meta).z;
-    if(incoming==0u||(!GAO_FILTERED_ONLY&&incoming==6u)){return;}
+    if(incoming==0u||(!gao_filtered_only()&&incoming==6u)){return;}
     gao_origin=gao_point(gao_seed);
     for(var i=lane;i<state.z;i+=POST_LANES){gao_shared_triangles[i]=gao_triangles[i*p.n+gao_seed];}
     for(var i=lane;i<state.y;i+=POST_LANES){gao_shared_indices[i]=gao_indices[i*p.n+gao_seed];}
@@ -71,40 +75,59 @@ fn gao_post(@builtin(workgroup_id) wid:vec3<u32>,@builtin(num_workgroups) grid:v
     loop {
         if(lane==0u){
             gao_post_active=gao_post_active_triangle();
+            gao_post_found=0u;
             if(gao_post_active!=GAO_NONE&&gao_status==0u&&gao_post_meta.w<500u){gao_post_ids=gao_global_triangle(gao_triangle(gao_post_active));gao_post_sphere=gao_prepare(gao_post_ids);gao_post_double=gao_prepare_double(gao_post_ids,gao_post_sphere);gao_post_sphere=gao_refined_sphere(gao_post_double);gao_post_range=gao_range(gao_post_sphere);}
             else{gao_post_active=GAO_NONE;}
         }
         workgroupBarrier();let face=workgroupUniformLoad(&gao_post_active);if(face==GAO_NONE){break;}
-        let low=gao_post_range.low;let high=gao_post_range.high;let extent=high-low+vec3<i32>(1);
-        // Source chooses the longest axis as its contiguous scanline axis.
-        var axis=0u;if(extent.y>extent.x){axis=1u;}if(extent.z>extent[axis]){axis=2u;}
-        let j=(axis+1u)%3u;let k=(axis+2u)%3u;let plane=extent[axis]*extent[j];let count=plane*extent[k];
-        if(lane==0u){gao_search_queries++;gao_search_largest=max(gao_search_largest,u32(count));if(count==i32(p.dim*p.dim*p.dim)){gao_search_full++;}}
-        var candidate=GAO_NONE;var distance=bitcast<f32>(0x7f800000u^p.zero);var found=0u;
-        let streams=128u/POST_LANES;var valid_streams=0u;
-        if(u32(count)>lane){valid_streams=min(streams,(u32(count)-1u-lane)/POST_LANES+1u);}
-        let all_found=(1u<<valid_streams)-1u;
-        for(var at=i32(lane);at<count;at+=i32(POST_LANES)){
-            let stream=(u32(at)/POST_LANES)%streams;
-            if((found&(1u<<stream))!=0u){continue;}
-            var cell=low;cell[k]+=at/plane;cell[j]+=(at%plane)/extent[axis];cell[axis]+=at%extent[axis];
-            let bucket=gao_cell_id(cell);
-            if(gao_cells[bucket]==gao_cells[bucket+1u]||gao_cell_outside(gao_post_sphere,cell)){continue;}
-            for(var k=gao_cells[bucket];k<gao_cells[bucket+1u];k++){let id=gao_slot(k);
-                if(id==gao_seed||any(gao_post_ids==vec3<u32>(id))){continue;}
-                gao_search_tests++;
-                let fast=gao_sphere_test(gao_post_sphere,id);
-                var inside=fast.x;
-                if(!fast.y){
-                    gao_search_uncertain++;let wide_sign=gao_prepared_double_sign(gao_post_double,id);
-                    if(wide_sign==2){gao_search_double_uncertain++;inside=gao_inside_exact(gao_post_ids,id);}else{inside=wide_sign<0;}
+        // A range of more than POST_STAGED cells is searched in boxes growing from its start
+        // cell (the centre's, or the seed's), up to the first box holding a point inside the
+        // sphere: any such point is a valid insertion, and those of a large sphere through the
+        // star lie near it, while the range's far side is often empty box (first check of an
+        // I grid at 500k: 22 such searches crossed 1.9M cells from the range's low corner).
+        let range=workgroupUniformLoad(&gao_post_range);let low=range.low;let high=range.high;let start=range.start;
+        let range_extent=high-low+vec3<i32>(1);let range_count=range_extent.x*range_extent.y*range_extent.z;
+        if(lane==0u){gao_search_queries++;if(range_count==i32(p.dim*p.dim*p.dim)){gao_search_full++;}}
+        var candidate=GAO_NONE;var distance=bitcast<f32>(0x7f800000u^p.zero);
+        var reach=select(i32(p.dim),POST_FIRST_REACH,range_count>POST_STAGED);
+        var previous_low=start+vec3<i32>(1);var previous_high=start-vec3<i32>(1);
+        loop {
+            let box_low=max(low,start-vec3<i32>(reach));let box_high=min(high,start+vec3<i32>(reach));let extent=box_high-box_low+vec3<i32>(1);
+            // Source chooses the longest axis as its contiguous scanline axis.
+            var axis=0u;if(extent.y>extent.x){axis=1u;}if(extent.z>extent[axis]){axis=2u;}
+            let j=(axis+1u)%3u;let k=(axis+2u)%3u;let plane=extent[axis]*extent[j];let count=plane*extent[k];
+            if(lane==0u){gao_search_largest=max(gao_search_largest,u32(count));}
+            var found=0u;
+            let streams=128u/POST_LANES;var valid_streams=0u;
+            if(u32(count)>lane){valid_streams=min(streams,(u32(count)-1u-lane)/POST_LANES+1u);}
+            let all_found=(1u<<valid_streams)-1u;
+            for(var at=i32(lane);at<count;at+=i32(POST_LANES)){
+                let stream=(u32(at)/POST_LANES)%streams;
+                if((found&(1u<<stream))!=0u){continue;}
+                var cell=box_low;cell[k]+=at/plane;cell[j]+=(at%plane)/extent[axis];cell[axis]+=at%extent[axis];
+                if(all(cell>=previous_low)&&all(cell<=previous_high)){continue;}
+                let bucket=gao_cell_id(cell);
+                if(gao_cells[bucket]==gao_cells[bucket+1u]||gao_cell_outside(gao_post_sphere,cell)){continue;}
+                for(var k=gao_cells[bucket];k<gao_cells[bucket+1u];k++){let id=gao_slot(k);
+                    if(id==gao_seed||any(gao_post_ids==vec3<u32>(id))){continue;}
+                    gao_search_tests++;
+                    let fast=gao_sphere_test(gao_post_sphere,id);
+                    var inside=fast.x;
+                    if(!fast.y){
+                        gao_search_uncertain++;let wide_sign=gao_prepared_double_sign(gao_post_double,id);
+                        if(wide_sign==2){gao_search_double_uncertain++;inside=gao_inside_exact(gao_post_ids,id);}else{inside=wide_sign<0;}
+                    }
+                    if(inside){
+                        found|=1u<<stream;let delta=gao_point(id)-gao_origin;let d2=dot(delta,delta);
+                        if(d2<distance||(d2==distance&&id<candidate)){candidate=id;distance=d2;}break;
+                    }
                 }
-                if(inside){
-                    found|=1u<<stream;let delta=gao_point(id)-gao_origin;let d2=dot(delta,delta);
-                    if(d2<distance||(d2==distance&&id<candidate)){candidate=id;distance=d2;}break;
-                }
+                if(found==all_found){break;}
             }
-            if(found==all_found){break;}
+            if(all(box_low==low)&&all(box_high==high)){break;}
+            if(candidate!=GAO_NONE){gao_post_found=1u;}
+            if(workgroupUniformLoad(&gao_post_found)!=0u){break;}
+            previous_low=box_low;previous_high=box_high;reach*=2;
         }
         gao_post_candidates[lane]=candidate;gao_post_distances[lane]=distance;
         workgroupBarrier();
@@ -113,11 +136,11 @@ fn gao_post(@builtin(workgroup_id) wid:vec3<u32>,@builtin(num_workgroups) grid:v
             workgroupBarrier();
         }
         let chosen=workgroupUniformLoad(&gao_post_candidates[0]);
-        if(GAO_FILTERED_ONLY&&gao_any_deferred()){gao_mark_deferred(face);workgroupBarrier();break;}
+        if(gao_filtered_only()&&gao_any_deferred()){gao_mark_deferred(face);workgroupBarrier();break;}
         if(chosen!=GAO_NONE){
             for(var i=lane;i<gao_post_meta.y;i+=POST_LANES){gao_classification_tests++;let ids=gao_global_triangle(gao_triangle(i));gao_post_remove[i]=u32(i==face||any(ids==vec3<u32>(chosen))||gao_inside_prepared(ids,chosen));}
             workgroupBarrier();
-            if(GAO_FILTERED_ONLY&&gao_any_deferred()){gao_mark_deferred(face);workgroupBarrier();break;}
+            if(gao_filtered_only()&&gao_any_deferred()){gao_mark_deferred(face);workgroupBarrier();break;}
             if(lane==0u){
                 gao_halfspace_post(chosen);
                 // The active face was marked processed before search. Keep it
@@ -134,7 +157,7 @@ fn gao_post(@builtin(workgroup_id) wid:vec3<u32>,@builtin(num_workgroups) grid:v
             // The whole star stays (see gao_finish_main); output triangles carry GAO_OUTPUT.
             for(var i=0u;i<gao_nv;i++){gao_write_index(i,gao_index(i)&~GAO_GREATER);}
         }
-        if(GAO_FILTERED_ONLY&&gao_status==1u){gao_status=6u;}
+        if(gao_filtered_only()&&gao_status==1u){gao_status=6u;}
         gao_post_meta=vec4<u32>(gao_nv,gao_nt,gao_status,gao_post_meta.w);gao_states[gao_seed]=vec4<u32>(gao_status,gao_nv,gao_nt,state.w+gao_post_meta.w);
     }
     workgroupBarrier();

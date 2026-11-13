@@ -43,7 +43,7 @@ export fn zo_measure(e: *Engine) i32 {
     return 0;
 }
 export fn zo_cover(e: *Engine) i32 {
-    e.measureCovering() catch |err| return e.fail("Covering radius: {s}", .{@errorName(err)});
+    e.checkCovering() catch |err| return e.fail("Covering radius: {s}", .{@errorName(err)});
     return 0;
 }
 export fn zo_relax(e: *Engine, steps: u32) i32 {
@@ -54,6 +54,11 @@ export fn zo_relax(e: *Engine, steps: u32) i32 {
 /// near field; delta 20 holds about 7.5k neighbours); 0 for all pairs.
 export fn zo_relax_neighbourhood(e: *Engine, delta: f32) i32 {
     e.setNeighbourhood(delta) catch |err| return e.fail("Relaxation neighbourhood: {s}", .{@errorName(err)});
+    return 0;
+}
+/// Each orientation's nearest neighbour (point values kind 0) and the separation, linear in N.
+export fn zo_spacing(e: *Engine) i32 {
+    e.spacing() catch |err| return e.fail("Spacing failed: {s}", .{@errorName(err)});
     return 0;
 }
 /// Per-point display values (kind 0 nearest-neighbour degrees, 1 local covering radius
@@ -102,6 +107,13 @@ export fn zo_mesh_tet_count(e: *Engine) u32 {
 /// `finish` restores the best sample. Local steps keep every pair of orientations at
 /// least `floor_deg` apart (an SO(3) angle; 0 for none) and never bring pairs already
 /// below it nearer.
+/// Basin hopping in covering optimization: a kick after `patience` steps without a relative
+/// gain of `progress`; the kick's RMS angle (`size`) and the trust radius after it (`trust`)
+/// are fractions of the best covering radius. Kept until changed.
+export fn zo_cover_kicks(e: *Engine, patience: u32, progress: f32, size: f32, trust: f32) i32 {
+    e.setKicks(.{ .patience = patience, .progress = progress, .size = size, .trust = trust }) catch |err| return e.fail("Covering kicks: {s}", .{@errorName(err)});
+    return 0;
+}
 export fn zo_cover_optimize(e: *Engine, steps: u32, mode: u32, finish: u32, floor_deg: f32) i32 {
     e.optimizeCovering(steps, mode, finish != 0, floor_deg) catch |err| return e.fail("Covering optimization: {s}", .{@errorName(err)});
     return 0;

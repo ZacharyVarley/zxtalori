@@ -33,12 +33,13 @@ def _library():
         "zo_set": ([ptr, C.c_uint32, C.POINTER(C.c_float), C.c_uint32], C.c_int),
         "zo_count": ([ptr], C.c_uint32), "zo_order": ([ptr], C.c_uint32),
         "zo_quaternions": ([ptr], C.POINTER(C.c_float)), "zo_operations": ([ptr], C.POINTER(C.c_float)),
-        "zo_measure": ([ptr], C.c_int), "zo_relax": ([ptr, C.c_uint32], C.c_int),
+        "zo_measure": ([ptr], C.c_int), "zo_spacing": ([ptr], C.c_int), "zo_relax": ([ptr, C.c_uint32], C.c_int),
         "zo_relax_neighbourhood": ([ptr, C.c_float], C.c_int),
         "zo_point_values": ([ptr, C.c_uint32], C.POINTER(C.c_float)),
         "zo_identity": ([ptr, C.c_uint32], C.c_int),
         "zo_cover": ([ptr], C.c_int),
         "zo_cover_optimize": ([ptr, C.c_uint32, C.c_uint32, C.c_uint32, C.c_float], C.c_int),
+        "zo_cover_kicks": ([ptr, C.c_uint32, C.c_float, C.c_float, C.c_float], C.c_int),
         "zo_mesh": ([ptr], C.c_int),
         "zo_mesh_vertices": ([ptr], C.POINTER(C.c_float)),
         "zo_mesh_tets": ([ptr], C.POINTER(C.c_uint32)),
@@ -104,10 +105,10 @@ class Grid:
                     raise ValueError("transport grids exist for T, O and I")
                 if h is None:
                     h = 6 if kind_id == 2 else 0
-                elif not 1 <= int(h) <= (64 if kind_id == 2 else 256):
-                    raise ValueError(f"h must be 1–{64 if kind_id == 2 else 256}")
-                if not 1 <= int(count) <= 1_000_000:
-                    raise ValueError("count must be 1–1,000,000")
+                elif not 1 <= int(h) <= (64 if kind_id == 2 else 512):
+                    raise ValueError(f"h must be 1–{64 if kind_id == 2 else 512}")
+                if not 1 <= int(count) <= 10_000_000:
+                    raise ValueError("count must be 1–10,000,000")
                 if exact:
                     self._check(self._lib.zo_generate_exact(self._handle, _group_id(group), int(count), int(identity or fixed_identity) | kind_id << 8))
                 else:
@@ -197,6 +198,13 @@ class Grid:
         self._check(self._lib.zo_measure(self._handle))
         return self.stats
 
+    def spacing(self):
+        """Each orientation's nearest orbit neighbour, point_values("separation"), and the
+        separation, in time linear in the count; energy measures are left as they are."""
+        self._open()
+        self._check(self._lib.zo_spacing(self._handle))
+        return self.stats
+
     def identity(self, *, add=False, fixed=False):
         """Optionally add the identity and hold it exactly fixed during relaxation."""
         self._open()
@@ -258,7 +266,8 @@ class Grid:
                 break
         return self
 
-    def optimize_covering(self, steps=2000, *, mode="face", batch=100, callback=None, local=True, check=False, local_rounds=None, min_separation_deg=None, live=True):
+    def optimize_covering(self, steps=2000, *, mode="face", batch=100, callback=None, local=True, check=False, local_rounds=None, min_separation_deg=None, live=True,
+                          patience=150, plateau_gain=5e-4, kick=0.04, kick_trust=0.03):
         """Lower the covering radius with GPU local steps; keeps the best sample.
 
         Each step moves disjoint groups of points around the largest empty caps
@@ -281,9 +290,14 @@ class Grid:
         its margin (stats["covering_optimizer_live_builds"]).
         live=False measures the whole sample before every step instead.
         Between batches the covering radius comes from that triangulation, and
-        energy and separation are re-measured on a time budget (about a tenth
-        of the run); stats["measures_current"] says whether they describe the
-        current iteration. The final sample is always measured in full.
+        energy and separation are not measured (pair sums over the whole orbit,
+        growing as N^2): stats["measures_current"] is False until measure() is
+        called. The final sample's covering radius is always measured in full.
+
+        Plateaus: after `patience` steps without a relative gain of `plateau_gain`
+        in the covering radius, the best sample is restored and every source
+        kicked by an RMS angle of `kick` times the best radius; trust radii then
+        restart at `kick_trust` times it.
 
         min_separation_deg keeps every pair of orientations at least that SO(3)
         angle apart in local steps; pairs already nearer are never brought
@@ -303,6 +317,9 @@ class Grid:
             raise ValueError(f"mode must be one of {', '.join(modes)}")
         if int(steps) < 0 or int(batch) < 1:
             raise ValueError("steps must be nonnegative and batch positive")
+        if not (1 <= int(patience) <= 1000000 and 0 <= plateau_gain < 1 and 0 <= kick <= 1 and 0 < kick_trust <= 1):
+            raise ValueError("patience must be 1-1000000, plateau_gain in [0, 1), kick in [0, 1] and kick_trust in (0, 1]")
+        self._check(self._lib.zo_cover_kicks(self._handle, int(patience), float(plateau_gain), float(kick), float(kick_trust)))
         done = 0
         while done < int(steps):
             count = min(int(batch), int(steps) - done)

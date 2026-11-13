@@ -48,7 +48,7 @@ def test_gao_parallel_exact_signs_and_cell_rejection(cooperative):
         points[i*5:i*5+5,:3]=q
         points[i*5:i*5+5,3]=np.asarray(ids,np.uint32).view(np.float32)
         expected.append(reference(q,ids)[0])
-    prefix='const GAO_FILTERED_ONLY=false;const GAO_INTEGER_PRIMES=96u;const GAO_POST=false;const GAO_MAX_P=64u;const GAO_MAX_T=128u;const POST_LANES=128u;const NONE=0xffffffffu;struct Cache{ids:vec4<u32>,more:vec4<u32>}\n'
+    prefix='const GAO_INTEGER_PRIMES=96u;const GAO_POST=false;const GAO_MAX_P=64u;const GAO_MAX_T=128u;const POST_LANES=128u;const NONE=0xffffffffu;struct Cache{ids:vec4<u32>,more:vec4<u32>}\n'
     prefix=prefix.replace('POST_LANES=128u','POST_LANES=32u').replace('GAO_POST=false',f'GAO_POST={str(cooperative).lower()}')
     prefix+='fn gao_record_sign(c:Cache,sign:i32){}\n'
     code=prefix+''.join((ROOT/'shaders'/name).read_text() for name in ['gao_storage.wgsl','gao_topology.wgsl','gao_geometry.wgsl','dt_math.wgsl','dt_double.wgsl','dt_integer.wgsl','gao_predicates.wgsl','gao_double.wgsl'])+'''

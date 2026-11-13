@@ -9,6 +9,18 @@ pub fn parse(text: []const u8) ?Group {
 pub fn name(group: Group) []const u8 {
     return @tagName(group);
 }
+/// The zone's largest chart coordinate |q_k|/q_0 (its largest Rodrigues component), where the
+/// zone lies in the chart q_0 >= |q_k|; null where it leaves that chart (C_n, D3). Maxima of
+/// linear programs over the zone's bisector halfspaces (covering.zonePlanes, from these f32
+/// frames), rounded up: O sqrt(2)-1, I 0.4016228. tests/test_covering.py recomputes them.
+pub fn chartReach(group: Group) ?f64 {
+    return switch (group) {
+        .C2, .C3, .C4, .C6, .D3 => null,
+        .D2, .D4, .D6, .T => 1,
+        .O => 0.414214,
+        .I => 0.401623,
+    };
+}
 pub fn operations(group: Group) []const [4]f32 {
     return switch (group) {
         .C2 => &ops_C2,

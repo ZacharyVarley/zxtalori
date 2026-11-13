@@ -9,10 +9,11 @@ octahedral grid; pick a group and a count, then relax or optimize the covering.
 
 ## What it does
 
-- **Generates** samples for all eleven proper point groups: product grids on the inverse Hopf
-  fibration (the default for every group, never cut at the zone boundary), FCC lattice transports
-  for T, O and I, seeded Haar-random samples, and exact counts from 32 to 1,000,000 (a smaller grid
-  filled at its largest empty Delaunay circumcentres).
+- **Generates** samples for all eleven proper point groups, up to 10,000,000 orientations: product
+  grids on the inverse Hopf fibration (the default for every group, never cut at the zone boundary;
+  about a second for 10 million), FCC lattice transports for T, O and I, seeded Haar-random
+  samples, and exact counts from 32 to 1,000,000 (a smaller grid filled at its largest empty
+  Delaunay circumcentres).
 - **Measures** minimum separation, mean geodesic repulsion energy, Riesz s = 1, 2, 3, Green and
   logarithmic energy ratios, and the **covering radius**: the largest empty cap, from a GPU
   Delaunay triangulation of the fundamental zone and a symmetry shell (a port of Gao and Chen's
@@ -24,9 +25,12 @@ octahedral grid; pick a group and a count, then relax or optimize the covering.
   against an exact triangulation that is updated in place as points move. An optional
   separation floor keeps every pair apart, and the best sample is kept.
 - **Shows** the sample in homochoric, Rodrigues or axis–angle space, in the fundamental zone or
-  all of SO(3), with points colored by symmetry zone, nearest-neighbour distance, largest
-  adjacent cap or Voronoi face count, and the Delaunay edges on request. Every measure has a
-  history plot.
+  all of SO(3): small samples drawn on the CPU, large ones as GPU discs, and very large ones (or
+  their SO(3) images, hundreds of millions) as a per-pixel density, chosen automatically. Points
+  are colored by symmetry zone, nearest-neighbour distance, largest adjacent cap or Voronoi face
+  count, on a scale relative to the median that shows where a sample is denser or sparser than
+  the rest, with the values' distribution and spread in the legend. Nearest neighbours come from a
+  pass linear in the count, so every size can be colored by them. Every measure has a history plot.
 - **Reads and writes** JSON and CSV quaternions (scalar first, right action `q*g`).
 
 One engine (Zig and WGSL) runs natively through wgpu-native and as WebAssembly on WebGPU, so the
@@ -61,12 +65,16 @@ with zo.haar("O", count=100_000, seed=193) as sample:
     sample.covering()
     sizes = sample.point_values("covering")    # per point: largest adjacent cap (degrees)
 
+with zo.generate("I", count=10_000_000) as sample:   # f=228: 9,876,998 orientations, about a second
+    sample.spacing()                           # each one's nearest neighbour, linear in the count
+    gaps = sample.point_values("separation")   # per point (degrees)
+
 with zo.generate("D2", count=1000, exact=True, fixed_identity=True) as sample:
     sample.relax(30)                           # identity included and held fixed
 ```
 
-`h` sets the T/O/I lattice resolution and `count` the approximate C/D budget; `exact=True`
-reaches `count` exactly for any group. Separation and covering radius are SO(3) rotation angles
+`h` sets the frequency (or, with `kind="transport"`, the T/O/I lattice semi-edge) and `count` the
+approximate size, up to 10,000,000; `exact=True` reaches `count` exactly, up to 1,000,000. Separation and covering radius are SO(3) rotation angles
 in degrees; the repulsion objective uses S³ geodesic distances in radians. Lower repulsion energy
 does not by itself certify a lower covering radius.
 
@@ -79,9 +87,8 @@ does not by itself certify a lower covering radius.
   exact predicates and the covering certificate.
 - [CONTRIBUTING.md](CONTRIBUTING.md): building, testing, conventions.
 
-Validated natively and in the browser through about 100,000 orientations; CI runs the test suite
-on Apple M1 (Metal). One million orientations remains a
-design goal.
+Generation, spacing and drawing are tested to 10 million orientations and covering checks to
+about a million, natively and in the browser; CI runs the test suite on Apple M1 (Metal).
 
 MIT ([LICENSE](LICENSE)). Third-party components keep their notices
 ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)). The wheels bundle

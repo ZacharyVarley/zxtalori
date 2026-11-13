@@ -92,7 +92,7 @@
 
     <div class="generate-row">
       <div id="h-field" class="field"><label class="field-label" for="semi-edge">Lattice semi-edge <i>h</i></label><input id="semi-edge" type="number" min="1" max="12" value="6"></div>
-      <div id="count-field" class="field" hidden><label class="field-label" for="target-count" id="target-label">Requested count</label><input id="target-count" type="number" min="32" max="1000000" step="1" value="1000"></div>
+      <div id="count-field" class="field" hidden><label class="field-label" for="target-count" id="target-label">Requested count</label><input id="target-count" type="number" min="32" max="10000000" step="1" value="1000"></div>
       <button id="generate-button" class="primary" disabled>Generate</button>
     </div>
     <p id="construction-note" class="hint"></p>
@@ -102,16 +102,16 @@
     <fieldset id="objective" class="field">
       <legend class="field-label">Objective</legend>
       <div class="segmented">
-        <label title="Pair repulsion 1/d + 1/(π − d), where d is the geodesic distance on S³. Symmetry images and antipodes are included. Barzilai–Borwein steps with curvature scaling."><input type="radio" name="objective" value="repulsion" checked><span>Repulsion</span></label>
+        <label title="Repulsion until its energy plateaus, then covering until several kicked descents in a row find nothing better. Steps limits each stage."><input type="radio" name="objective" value="auto" checked><span>Auto</span></label>
+        <label title="Pair repulsion 1/d + 1/(π − d), where d is the geodesic distance on S³. Symmetry images and antipodes are included. Barzilai–Borwein steps with curvature scaling."><input type="radio" name="objective" value="repulsion"><span>Repulsion</span></label>
         <label title="Moves disjoint groups of points around the largest empty caps and keeps a move only if the exact local maximum drops. Small kicks leave plateaus, and the best sample found is kept. Separation is not constrained unless a floor is set, and usually falls."><input type="radio" name="objective" value="covering"><span>Covering</span></label>
-        <label title="Repulsion until its energy plateaus, then covering until several kicked descents in a row find nothing better. Steps limits each stage."><input type="radio" name="objective" value="auto"><span>Auto</span></label>
       </div>
     </fieldset>
 
     <div class="field">
       <label class="field-label spread" for="iterations">Steps<span class="meta">step <b id="iteration-count">0</b></span></label>
       <div class="run-row">
-        <input id="iterations" type="number" min="1" value="100">
+        <input id="iterations" type="number" min="1" value="5000">
         <button id="relax-button" class="primary" disabled><svg class="icon"><use href="#i-play"/></svg>Go</button>
         <button id="stop-button" class="danger" disabled><svg class="icon"><use href="#i-stop"/></svg>Stop</button>
       </div>
@@ -132,7 +132,7 @@
       </div>
     </fieldset>
 
-    <fieldset id="free-set" class="field" hidden>
+    <fieldset id="free-set" class="field">
       <legend class="field-label">Free points per job</legend>
       <div class="segmented">
         <label title="The four sources of the offending cap"><input type="radio" name="free-set" value="0"><span>Tet</span></label>
@@ -140,12 +140,22 @@
       </div>
     </fieldset>
 
+    <details id="kick-field" class="field kicks">
+      <summary class="field-label" title="Basin hopping: when the covering radius stops improving, the best sample is restored and every orientation is kicked">Plateau kicks</summary>
+      <div class="kick-grid">
+        <label for="kick-patience" title="Steps without the gain below before a kick">Patience (steps)</label><input id="kick-patience" type="number" min="1" max="1000000" step="1" value="150">
+        <label for="kick-gain" title="Relative drop in the covering radius that counts as progress and resets the patience count">Gain (%)</label><input id="kick-gain" type="number" min="0" max="99" step="0.01" value="0.05">
+        <label for="kick-size" title="RMS kick angle as a share of the best covering radius">Kick (% of radius)</label><input id="kick-size" type="number" min="0" max="100" step="0.5" value="4">
+        <label for="kick-trust" title="Each orientation's step limit after a kick, as a share of the best covering radius; it grows while moves are kept">Trust (% of radius)</label><input id="kick-trust" type="number" min="0.01" max="100" step="0.5" value="3">
+      </div>
+    </details>
+
     <div id="floor-field" class="field" hidden title="Local steps keep every pair of orientations at least this far apart.">
       <label class="field-label" for="separation-floor">Min separation (°)</label>
       <div class="input-group"><input id="separation-floor" type="number" min="0" max="179" step="0.01" placeholder="None"><button id="floor-from-current" type="button" title="Set the floor to 99% of the current separation">99% of current</button></div>
     </div>
 
-    <div id="keep-field" class="field" hidden title="The covering stage keeps every pair of orientations at least this share of the separation repulsion reached.">
+    <div id="keep-field" class="field" title="The covering stage keeps every pair of orientations at least this share of the separation repulsion reached.">
       <label class="field-label" for="keep-separation">Keep separation (%)</label>
       <input id="keep-separation" type="number" min="0" max="100" step="0.5" value="99">
     </div>
@@ -158,6 +168,7 @@
 <section class="stage" aria-label="Orientation view">
 
   <div class="viewport card" id="canvas-wrap">
+    <canvas id="view-gpu" aria-hidden="true"></canvas>
     <canvas id="view" tabindex="0" aria-label="3D orientation plot. Drag to orbit, Shift-drag to pan, scroll to zoom, click to inspect."></canvas>
 
     <div class="view-head">
@@ -165,31 +176,56 @@
         <h1 id="sample-heading">O · Octahedral</h1>
         <div class="view-sub"><span id="sample-badge">No sample</span><span id="selected-badge" class="tag" hidden></span></div>
       </div>
-      <div class="view-tools">
-        <fieldset id="view-domain" class="segmented glass"><legend class="sr-only">View domain</legend>
-          <label title="Fundamental zone"><input type="radio" name="view-domain" value="fz" checked><span>Zone</span></label>
-          <label title="Full SO(3), streamed symmetry images"><input type="radio" name="view-domain" value="so3"><span>SO(3)</span></label>
-        </fieldset>
-        <fieldset id="projection" class="segmented glass"><legend class="sr-only">Projection</legend>
-          <label><input type="radio" name="projection" value="homochoric" checked><span>Homochoric</span></label>
-          <label><input type="radio" name="projection" value="rodrigues"><span>Rodrigues</span></label>
-          <label><input type="radio" name="projection" value="axisangle"><span>Axis–angle</span></label>
-        </fieldset>
-        <div class="tool-group">
-          <button id="reset-view" class="tool" aria-label="Reset view" title="Reset view (0)"><svg class="icon"><use href="#i-reset"/></svg></button>
-          <button id="display-button" class="tool" popovertarget="display-panel" aria-label="Display settings" title="Display settings"><svg class="icon"><use href="#i-sliders"/></svg></button>
-        </div>
+      <div class="tool-group">
+        <button id="reset-view" class="tool" aria-label="Reset view" title="Reset view (0)"><svg class="icon"><use href="#i-reset"/></svg></button>
+        <button id="display-button" class="tool" popovertarget="display-panel" aria-label="Display settings" title="Display settings"><svg class="icon"><use href="#i-sliders"/></svg></button>
       </div>
+    </div>
+
+    <!-- What is drawn and how: down the plot's left side. -->
+    <div class="view-rail rail-left">
+      <fieldset id="view-domain" class="segmented glass"><legend class="sr-only">View domain</legend>
+        <label title="Fundamental zone"><input type="radio" name="view-domain" value="fz" checked><span>Zone</span></label>
+        <label title="Full SO(3), streamed symmetry images"><input type="radio" name="view-domain" value="so3"><span>SO(3)</span></label>
+      </fieldset>
+      <select id="projection" class="glass glass-select" aria-label="Projection" title="Projection">
+        <option value="homochoric" selected>Homochoric</option>
+        <option value="rodrigues">Rodrigues</option>
+        <option value="axisangle">Axis–angle</option>
+      </select>
+      <div id="cut-tools" class="cut-tools glass" title="Hide the points on one side of a plane">
+        <select id="cut-axis" class="glass-select" aria-label="Cut plane">
+          <option value="none" selected>No cut</option>
+          <option value="0">Cut ⟂ x</option>
+          <option value="1">Cut ⟂ y</option>
+          <option value="2">Cut ⟂ z</option>
+        </select>
+        <input id="cut-offset" type="range" min="-1" max="1" step="0.01" value="0" aria-label="Cut position" title="Move the plane along its axis (double-click to centre it)" hidden>
+        <button id="cut-flip" type="button" class="cut-flip" data-sign="+" title="Keep the other side" hidden>keep +</button>
+      </div>
+      <label class="legend-item toggle" title="Show the fundamental-zone boundary"><input id="show-zone" type="checkbox" checked><i class="swatch boundary"></i>Boundary</label>
     </div>
 
     <div id="view-empty" class="view-empty"><span class="spinner" aria-hidden="true"></span><p id="empty-copy">Connecting to GPU…</p></div>
 
-    <div class="view-foot">
-      <div class="legend">
-        <span class="legend-item" id="color-key"><i class="swatch current" id="color-swatch"></i><span id="color-name">Current</span><span id="color-scale" class="color-scale" hidden><span id="color-low"></span><i id="color-ramp" class="ramp"></i><span id="color-high"></span></span></span>
-        <label class="legend-item toggle" title="Show the generated sample"><input id="show-original" type="checkbox"><i class="swatch original"></i>Original</label>
-        <label class="legend-item toggle" title="Show the fundamental-zone boundary"><input id="show-zone" type="checkbox" checked><i class="swatch boundary"></i>Boundary</label>
+    <!-- What the colours mean: down the plot's right side. -->
+    <div class="view-rail rail-right">
+      <div class="color-key glass" id="color-key">
+        <select id="color-by" class="legend-select" aria-label="Color points by" title="What the point colors show">
+          <option value="auto" selected>Objective</option>
+          <option value="separation">Nearest neighbour</option>
+          <option value="covering">Largest adjacent cap</option>
+          <option value="faces">Voronoi faces</option>
+          <option value="zone">Symmetry zone</option>
+          <option value="single">Single color</option>
+        </select>
+        <div class="color-title"><i class="swatch current" id="color-swatch"></i><span id="color-name">Current</span></div>
+        <div id="color-scale" class="color-scale" hidden><span id="color-low"></span><canvas id="color-hist" class="histogram" aria-hidden="true"></canvas><span id="color-high"></span></div>
+        <span id="color-spread" class="color-spread"></span>
       </div>
+    </div>
+
+    <div class="view-foot">
       <div class="view-meta">
         <span id="display-count"></span>
         <span class="help" tabindex="0" aria-describedby="view-help">?<span id="view-help" class="help-pop" role="tooltip"><b>Drag</b> orbit<br><b>Shift-drag</b> or <b>right-drag</b> pan<br><b>Scroll</b> zoom<br><b>Click</b> inspect a point<br><b>Arrows</b> orbit · <b>+ −</b> zoom · <b>0</b> reset</span></span>
@@ -200,22 +236,13 @@
   <div id="display-panel" class="popover" popover="manual" aria-label="Display settings">
     <header class="popover-head"><h2>Display</h2><button class="tool plain" popovertarget="display-panel" popovertargetaction="hide" aria-label="Close display settings"><svg class="icon"><use href="#i-x"/></svg></button></header>
     <div class="popover-body">
-      <div class="field row"><label for="display-limit">Points drawn</label><select id="display-limit"><option value="100000" selected>≤ 100,000</option><option value="10000">≤ 10,000</option><option value="1000">≤ 1,000</option><option value="0">All</option></select></div>
-      <div class="field row"><label for="color-by">Color by</label><select id="color-by">
-        <option value="auto" selected>Objective</option>
-        <option value="zone">Symmetry zone</option>
-        <option value="single">Single color</option>
-        <option value="separation">Nearest neighbour</option>
-        <option value="covering">Largest adjacent cap</option>
-        <option value="faces">Voronoi faces</option>
-      </select></div>
-      <p class="hint" id="color-hint">Repulsion colors by nearest-neighbour distance and covering runs by the largest Delaunay cap at each point; both come with each step's measures. Voronoi faces come from covering checks.</p>
+      <div class="field row" title="Auto draws small samples on the CPU, large ones as GPU discs, and very large ones (or SO(3) views of them) as a per-pixel density of every orbit image."><label for="render-mode">Rendering</label><select id="render-mode"><option value="auto" selected>Auto</option><option value="splat">CPU splat</option><option value="points">GPU points</option><option value="density">GPU density</option></select></div>
+      <div class="field row" title="Relative centres a blue–red scale on the median, so uniform regions read neutral; Range spans the 1st to 99th percentile."><label for="color-range">Measure scale</label><select id="color-range"><option value="relative" selected>Relative</option><option value="range">Range</option></select></div>
       <div class="field"><label class="field-label spread" for="point-size">Point radius <output id="point-size-value" for="point-size">2</output></label><input id="point-size" type="range" min="0.5" max="6" value="2" step="0.25"></div>
       <div class="field"><label class="field-label spread" for="wire-width">Wire width <output id="wire-width-value" for="wire-width">0.85</output></label><input id="wire-width" type="range" min="0.2" max="3" value="0.85" step="0.05"></div>
       <div class="switches">
         <label class="switch"><input id="auto-rotate" type="checkbox"><span class="track"></span>Rotate about world Z</label>
       </div>
-      <div class="field row"><label for="cut-plane">Cut through origin</label><select id="cut-plane"><option value="none">None</option><option value="x">Keep +X</option><option value="y">Keep +Y</option><option value="z">Keep +Z</option><option value="-x">Keep −X</option><option value="-y">Keep −Y</option><option value="-z">Keep −Z</option></select></div>
       <div id="clip-field" class="field row" hidden><label for="rf-limit">Rodrigues radius ≤</label><input id="rf-limit" type="number" min="1" max="100" value="4" step="1"></div>
 
       <div class="popover-section">
@@ -225,8 +252,8 @@
           <label class="switch"><input id="show-shell" type="checkbox" checked><span class="track"></span>Show shell images</label>
         </div>
         <div class="field row"><label for="dt-budget">Edge budget</label><input id="dt-budget" type="number" min="100" max="100000" value="6000" step="100"></div>
-        <button id="load-dt" class="block" disabled>Compute triangulation</button>
-        <p id="dt-note" class="hint">FZ and shell triangulation. Compute again after points move.</p>
+        <button id="load-dt" class="block" disabled title="FZ and shell triangulation. Compute again after points move.">Compute triangulation</button>
+        <p id="dt-note" class="hint"></p>
       </div>
     </div>
   </div>
@@ -251,11 +278,6 @@
 
   <section class="section">
     <header class="section-head"><h2>Measures</h2><button id="measure-button" class="ghost small" disabled title="Recompute pair energies and separation"><svg class="icon"><use href="#i-refresh"/></svg>Refresh</button></header>
-
-    <dl class="counts">
-      <div><dt>FZ orientations</dt><dd id="point-count">—</dd></div>
-      <div><dt>SO(3) images</dt><dd id="extended-count">—</dd></div>
-    </dl>
 
     <div class="tiles">
       <button class="tile" data-metric="separation_deg" title="Minimum separation between orientations"><span>Separation</span><strong id="separation">—</strong></button>

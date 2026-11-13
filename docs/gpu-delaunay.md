@@ -89,6 +89,16 @@ every site the same id in every pass, and the DT's symbolic tie-breaking
 depends on these ids. With atomic compaction they depended on scheduling,
 and lattice passes needed several times as many exact predicates.
 
+Only images of the rim are classified: the sources within the widest band
+(the fence's, below) of a zone halfspace, listed in source order by the same
+count, scan and write, with the core sites written on the way. An image of a
+source in the zone lies in another copy of the zone, at least the source's
+distance to the zone boundary away, so no other source has an image in a band.
+The image passes are dispatched indirectly over the rim's images, in the same
+order, so the shell is unchanged. Classifying all 2|K|N images took 55 ms of
+the GPU time of a first check of an I grid at 494k (I has 119 halfspaces), the
+rim passes 6 ms.
+
 The completeness check is independent of the triangulator. Four normalized
 cube charts `(1,x,y,z)`, with the major coordinate permuted, cover RP3.
 For m subdivisions per coordinate, every chart point lies within S3 angular
@@ -99,7 +109,14 @@ and its antipode violate some unit FZ halfspace by more than sin(delta), with
 numerical padding. A nearest chart vertex to any FZ point is within delta, so
 it cannot violate that point's halfspaces by more than sin(delta). Thus this
 pruning preserves the chart cover, including equatorial seams. Remaining
-probes are folded into the FZ. Each must find an
+probes are folded into the FZ. The zones of D2, D4, D6, T, O and I lie in
+chart 0 (q0 >= |q_k|), within a box of half-width `groups.chartReach` (the zone's
+largest Rodrigues component: 1, 1, 1, 1, sqrt(2)-1 and 0.4016, from linear
+programs over the halfspaces; tests/test_covering_certificate.py recomputes
+them). The nearest chart-0 vertex of a zone point lies within half a step of
+that box, so only the box's vertices (plus a step) are probed: about 1% of the
+four charts' vertices for I, 4% for O. C_n and D3 zones leave chart 0 and keep
+all four. Each must find an
 orbit site within T-delta, with additional numerical margins. By the triangle
 inequality every domain point then has a site within T. Therefore every
 maximal empty cap has radius <= T, and all sites that can influence an FZ cap
@@ -119,15 +136,52 @@ radius can differ by rounding (1e-6 degrees on T h=12). The fence bounds the emp
 shell sites, which otherwise reach the regional guards: their searches crossed
 up to 200 cells and were then deferred to the cooperative post pass.
 
-On lattices the fence's co-spherical images multiply exact predicates (about
-tenfold on T h=8). The fence is therefore used only after a Gao pass with at most n/256 exact predicates, and a
-new sample starts without it. `Gpu.delaunay_mode` bit `1 << 20` omits it for
+Without the fence the outermost shell stars' searches reach the regional guards
+and cross much of the grid: a first check of an I grid of 494k orientations took
+2.4 s unfenced and 0.19 s fenced, a T grid of 490k 3.2 s and 0.35 s. On small
+lattices the fence's co-spherical images multiply exact predicates (about
+tenfold on T h=8, 3,281 points: 78 ms unfenced against 428 ms), but from about
+20k orientations it is faster there too (T h=16: 1.9 s against 0.23 s). So every
+sample is fenced except a lattice of fewer than 10,000 orientations: a transport
+grid before its first pass, or a sample whose last Gao pass had more than n/256
+exact predicates.
+
+The grid holds about five sites per occupied cell. A new sample's first pass
+counts the occupied cells of a box-sized trial grid (one small readback) and
+sizes its grid from that; later passes reuse the last grid's occupancy, and
+lattices keep the box-sized grid, which suits their co-spherical cells (T
+transport at 354k: 4.5 s against 13.5 s sized to occupancy).
+
+The main and post passes run in slices of 32,768 stars, a submit apart (the
+slice's first star in `lower.w`): one dispatch over a million stars can hold the
+GPU for seconds, and the display waits for it. A shell that fails the
+certificate is rejected before it is triangulated, so a margin too small for a
+random sample costs the shell and the probes, not a triangulation. `Gpu.delaunay_mode` bit `1 << 20` omits it for
 comparison.
+
+A post-pass search over more than 512 cells grows boxes from the range's start
+cell (the sphere centre's, or the seed's when the centre is outside the grid)
+and stops at the first box holding a point inside the sphere; smaller ranges
+are searched whole, as before. Any point inside the sphere is a valid
+insertion, so the stars are unchanged. Large spheres through a star still
+contain points near it, while the range's far side is often empty box: on a
+first check of an I grid at 494k, 22 searches started from the range's low
+corner crossed 1.9M cells, and the post pass took 38 ms of GPU time; it now
+takes 4 ms, with the same 3,260,558 tetrahedra.
 
 The shell is stereographically projected from the south pole, triangulated,
 and mapped back to S3. Double-single circumcap normals retain the pole-side
 choice and the FZ filter. The largest cap's witness is independently checked
-against every original orbit; a mismatch is an error. `sample.covering()`
+against every original orbit; a mismatch is an error. A cap is accepted when its
+four vertices are equidistant from the double-single centre, rounded to f32,
+within 2e-6 chord + 1e-4 of its squared chord: the rounded centre alone moves a
+squared chord by about 5e-7 chord. An FZ-centred cap that fails this, or has no
+centre, is counted (`covering_unresolved_caps`) with an upper estimate of its
+radius, and the check fails (UnresolvedCircumcap) unless that estimate is below
+the reported radius, so an unresolved cap can never hide the largest one. Caps
+whose vertices all lie beyond T are dropped as before. A repeated request for an
+unchanged sample (the same group and orientations, by hash) returns the last
+result (`covering_cached`). `sample.covering()`
 returns its SO(3) rotation radius in degrees, twice the S3 angular radius,
 along with witness, shell bound/count, tetrahedron/probe counts, cold-predicate
 count and scheduling rounds.

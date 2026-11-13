@@ -45,3 +45,23 @@ def test_imported_grid_covering_and_regeneration_invalidates():
     with zxtalori.from_quaternions(q,'I') as grid:
         result=grid.covering();assert abs(result['covering_radius_deg']-full_orbit_covering(grid.quaternions,grid.operations))<2e-4
         grid.set(q,'O');assert grid.stats['covering_radius_deg'] is None
+
+
+def test_covering_past_the_workgroup_limit():
+    # The witness check runs one thread per orbit image: 12 million here, past 65,535 x 128.
+    with zxtalori.generate("O", count=500_000) as grid:
+        result = grid.covering()
+        assert 0.8 < result["covering_radius_deg"] < 0.95
+
+
+def test_covering_result_is_kept_for_an_unchanged_sample():
+    with zxtalori.haar("O", 3000, 11) as grid:
+        first = grid.covering()
+        assert not first["covering_cached"] and first["covering_unresolved_caps"] == 0
+        again = grid.covering()
+        assert again["covering_cached"] and again["covering_radius_deg"] == first["covering_radius_deg"]
+        grid.relax(1)
+        moved = grid.covering()
+        assert not moved["covering_cached"] and moved["covering_radius_deg"] != first["covering_radius_deg"]
+        grid.set(grid.quaternions, "T")      # same orientations, another group
+        assert not grid.covering()["covering_cached"]

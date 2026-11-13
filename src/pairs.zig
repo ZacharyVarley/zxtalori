@@ -78,8 +78,7 @@ pub fn forceRows(gpa: Allocator, g: *gpu.Gpu, q: gpu.Buf, n: u32, ops: gpu.Buf, 
         }
     }
     g.read(out, 0, std.mem.sliceAsBytes(rows));
-    g.submit();
-    try g.dev.wait();
+    try g.wait();
     if (g.dev.takeError() != null) return error.GpuValidation;
     return rows;
 }
@@ -93,8 +92,7 @@ fn forceRowsParallel(gpa: Allocator, g: *gpu.Gpu, q: gpu.Buf, n: u32, ops: gpu.B
     const rows = try gpa.alloc(Row, n);
     errdefer gpa.free(rows);
     g.read(out, 0, std.mem.sliceAsBytes(rows));
-    g.submit();
-    try g.dev.wait();
+    try g.wait();
     if (g.dev.takeError() != null) return error.GpuValidation;
     return rows;
 }
@@ -228,6 +226,8 @@ pub const RelaxState = struct {
     state: gpu.Buf = .{},
     sums: gpu.Buf = .{},
     histogram: gpu.Buf = .{},
+    /// Each source's nearest orbit point in degrees (`nearestPass`).
+    nearest_gpu: gpu.Buf = .{},
     /// `rows` holds the forces of the current positions (the measure that ended the
     /// last relax call): the next step starts from them instead of a second force pass.
     current: bool = false,
@@ -243,7 +243,7 @@ pub const RelaxState = struct {
 
     fn release(self: *RelaxState) void {
         if (self.g) |g| {
-            for ([_]*gpu.Buf{ &self.rows, &self.partial, &self.previous, &self.state, &self.sums, &self.histogram }) |b| g.release(b);
+            for ([_]*gpu.Buf{ &self.rows, &self.partial, &self.previous, &self.state, &self.sums, &self.histogram, &self.nearest_gpu }) |b| g.release(b);
             if (self.near) |*nf| nf.release(g);
         }
         // The near-field settings stay (its buffers are gone, and it sizes them again).
@@ -306,14 +306,32 @@ pub const RelaxState = struct {
         const rows = try gpa.alloc(Row, n);
         defer gpa.free(rows);
         g.read(self.rows, 0, std.mem.sliceAsBytes(rows));
-        g.submit();
-        try g.dev.wait();
+        try g.wait();
         if (g.dev.takeError() != null) return error.GpuValidation;
         if (self.near) |*nf| if (nf.overflowed()) return self.measure(gpa, g, q, n, ops, order, nearest);
         const result = try quickMeasures(rows, order);
         if (nearest) |out| nearestDegrees(rows, out);
         self.current = true;
         return result;
+    }
+
+    /// Each source's nearest orbit point (SO(3) degrees) into `out` from one force pass, of
+    /// which only those n values come back; returns the smallest. No step state is kept.
+    pub fn nearestPass(self: *RelaxState, g: *gpu.Gpu, q: gpu.Buf, n: u32, ops: gpu.Buf, order: u32, out: []f32) !f64 {
+        self.g = g;
+        self.current = false;
+        try self.recordForces(g, q, n, ops, order);
+        g.ensure(&self.nearest_gpu, @as(u64, n) * 4);
+        const params = [8]u32{ n, order, 0, 0, 0, 0, 0, 0 };
+        g.dispatchFlat(try g.pipeline("pairs/nearest", shaders.pairs, "nearest_degrees"), (n + 255) / 256, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), self.rows.at(3), self.nearest_gpu.at(12) });
+        g.read(self.nearest_gpu, 0, std.mem.sliceAsBytes(out[0..n]));
+        try g.wait();
+        if (g.dev.takeError() != null) return error.GpuValidation;
+        if (self.near) |*nf| if (nf.overflowed()) return self.nearestPass(g, q, n, ops, order, out);
+        var least: f32 = 180;
+        for (out[0..n]) |d| least = @min(least, d);
+        if (!(least > 0)) return error.DuplicateOrientations;
+        return least;
     }
 
     /// Records one step; nothing is read back. A non-finite force or a duplicate orientation
@@ -332,7 +350,7 @@ pub const RelaxState = struct {
         const count = try g.pipeline("relax/median_count", shaders.relax, "median_count");
         const pick = try g.pipeline("relax/median_pick", shaders.relax, "median_pick");
         const move = try g.pipeline("relax/move", shaders.relax, "relax_move");
-        g.dispatch(stats, groups, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), self.rows.at(2), self.previous.at(3), self.state.at(4), self.sums.at(5) });
+        g.dispatchFlat(stats, groups, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), self.rows.at(2), self.previous.at(3), self.state.at(4), self.sums.at(5) });
         g.dispatch(sums, 1, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), self.state.at(4), self.sums.at(5), self.histogram.at(6) });
         // Enough workgroups to fill a GPU; each strides over the sites.
         const median_groups = @max(1, @min((n + 255) / 256, 256));
@@ -341,15 +359,14 @@ pub const RelaxState = struct {
             g.dispatch(count, median_groups, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), self.rows.at(2), self.state.at(4), self.histogram.at(6) });
             g.dispatch(pick, 1, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), self.state.at(4), self.histogram.at(6) });
         }
-        g.dispatch(move, groups, 1, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), q.at(1), self.rows.at(2), self.previous.at(3), self.state.at(4) });
+        g.dispatchFlat(move, groups, 1, &.{ g.uniform(0, std.mem.asBytes(&params)), q.at(1), self.rows.at(2), self.previous.at(3), self.state.at(4) });
     }
 
     /// Waits for the recorded steps and reports the last one.
     pub fn finish(self: *RelaxState, g: *gpu.Gpu) !StepResult {
         var values: [16]u32 = undefined;
         g.read(self.state, 0, std.mem.asBytes(&values));
-        g.submit();
-        try g.dev.wait();
+        try g.wait();
         if (g.dev.takeError() != null) return error.GpuValidation;
         return self.stepResult(values);
     }
@@ -367,8 +384,7 @@ pub const RelaxState = struct {
         if (recorded) g.read(self.state, 0, std.mem.asBytes(&values));
         g.read(q, 0, std.mem.sliceAsBytes(host));
         g.read(self.rows, 0, std.mem.sliceAsBytes(rows));
-        g.submit();
-        try g.dev.wait();
+        try g.wait();
         if (g.dev.takeError() != null) return error.GpuValidation;
         const last: ?StepResult = if (recorded) try self.stepResult(values) else null;
         // A shell that outgrew its buffers is sized again and the forces redone.

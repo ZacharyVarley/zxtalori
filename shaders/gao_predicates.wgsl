@@ -72,7 +72,7 @@ fn gao_numeric_sign(v:vec4<u32>,e:u32,kind:u32)->i32{
     if(sign==2){sign=double_filter(v,e,kind);}
     if(sign==2){
         if(gao_structural_zero(v,e,kind)){return 0;}
-        if(GAO_FILTERED_ONLY){gao_defer_exact=true;return 2;}
+        if(gao_filtered_only()){gao_defer_exact=true;return 2;}
         sign=gao_integer_sign(Cache(v,vec4<u32>(e,kind,0u,0u)));
     }
     return sign;

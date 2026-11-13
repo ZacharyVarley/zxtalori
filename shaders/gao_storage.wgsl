@@ -2,12 +2,13 @@
 // Physically bucket-sorted coordinates, cell offsets, component-major local
 // triangles and vertex IDs. A failed main pass preserves its entire local mesh.
 struct GaoParams {
-    // reserved: bit 2 collects exact-predicate statistics; bit GAO_FULL searches every
+    // reserved: bit 2 collects exact-predicate statistics; GAO_FILTERED defers exact signs; bit GAO_FULL searches every
     // face, so each star is its exact Delaunay star (live updates read neighbours from
     // stars). Without it, as in the source, faces of tetrahedra that another seed
     // outputs are never searched and may be stale.
     n:u32, dim:u32, zero:u32, reserved:u32,
-    // Sites with original id >= seeds are not seeds: no star of their own.
+    // Sites with original id >= seeds are not seeds: no star of their own. The main and post
+    // passes start at star lower.w (u32 bits; the mark pass reads it as a reach cap).
     // Live updates (gao_delaunay.Live): scale.w > 0.5 recomputes only the stars marked
     // GAO_PENDING. With GAO_LISTED the slots are not sorted by cell: gao_cells holds the
     // cell offsets, then the slots of each cell in that order (gao_slot).
@@ -16,6 +17,10 @@ struct GaoParams {
 const GAO_PENDING=15u;
 const GAO_FULL=4u;
 const GAO_LISTED=8u;
+// The filtered post pass: signs the binary32 and double-single filters cannot settle are
+// deferred (the star is marked for the full pass) instead of computed exactly.
+const GAO_FILTERED=16u;
+fn gao_filtered_only()->bool{return (p.reserved&GAO_FILTERED)!=0u;}
 @group(0) @binding(0) var<uniform> p:GaoParams;
 @group(0) @binding(1) var<storage,read> coordinates:array<vec4<u32>>;
 @group(0) @binding(2) var<storage,read> gao_cells:array<u32>;
