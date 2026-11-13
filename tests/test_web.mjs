@@ -39,9 +39,12 @@ function chromePath() {
 }
 
 const failures = [];
+// In GitHub Actions a failure is also an annotation, shown on the run's page without its log.
+const annotate = (text) => String(text).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A").slice(0, 4000);
 const check = (name, ok, info = "") => {
   console.log(`${ok ? "ok  " : "FAIL"} ${name}${info ? "  " + info : ""}`);
   if (!ok) failures.push(name);
+  if (!ok && process.env.GITHUB_ACTIONS) console.log(`::error title=web app::${annotate(`${name}  ${info}`)}`);
 };
 
 // ── the static server and the browser ──
