@@ -75,20 +75,27 @@ def test_measures_match_reference_records(group, f, excess, mesh):
         assert abs(grid.measure()["mesh_ratio"] - mesh) < 1e-5
 
 
+def regenerate(grid, group, h=0, count=2048):
+    """Generate again on the grid's own engine: creating an engine costs about half a second."""
+    grid._check(grid._lib.zo_generate(grid._handle, zxtalori.api._group_id(group), h, count, 0, 0))
+
+
 @pytest.mark.parametrize("group", zxtalori.GROUPS)
 def test_counts_and_selection(group):
-    for f in (5, 8, 11, 14):
-        with zxtalori.generate(group, h=f) as grid:
-            assert len(grid) == count(group, f) and grid.stats["h"] == f
-    # With no frequency, the count nearest the request by ratio.
     sizes = {f: count(group, f) for f in range(1, 513) if count(group, f) <= 10_000_000}
-    for target in (500, 2048):
-        with zxtalori.generate(group, count=target) as grid:
-            assert grid.stats["grid"] == "hopf"
-            assert abs(np.log(len(grid) / target)) == min(abs(np.log(n / target)) for n in sizes.values())
     with zxtalori.generate(group, count=1000, exact=True, identity=True) as grid:
         assert len(grid) == 1000 and grid.stats["grid"] == "hopf"
         assert grid.stats["base_count"] == max(n for n in sizes.values() if n <= 999)
+        # Every frequency up to about 1,000 orientations (O reaches h=14, where its ring
+        # count takes its second correction).
+        for f in [f for f, n in sizes.items() if n <= 1100]:
+            regenerate(grid, group, h=f)
+            assert len(grid) == count(group, f) and grid.stats["h"] == f
+        # With no frequency, the count nearest the request by ratio.
+        for target in (300, 900):
+            regenerate(grid, group, count=target)
+            assert grid.stats["grid"] == "hopf"
+            assert abs(np.log(len(grid) / target)) == min(abs(np.log(n / target)) for n in sizes.values())
 
 
 def test_frequency_beyond_the_count_limit():
@@ -107,6 +114,7 @@ def test_transport_is_polyhedral_only():
         zxtalori.generate("O", kind="lattice")
 
 
+@pytest.mark.large
 def test_ten_million():
     # Near the count limit, in the zone and nearest to the request.
     with zxtalori.generate("O", count=10_000_000) as grid:

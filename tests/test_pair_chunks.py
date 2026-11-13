@@ -8,7 +8,7 @@ def with_scale(g, scale):
     lib.zo_pair_budget.argtypes, lib.zo_pair_budget.restype = [C.c_void_p, C.c_float], None
     lib.zo_pair_budget(g._handle, scale)
 
-@pytest.mark.parametrize("group,count", [("T", 700), ("O", 1500), ("D4", 400)])
+@pytest.mark.parametrize("group,count", [("T", 700), ("O", 1000), ("D4", 400)])
 def test_chunked_pair_sums_match_single_dispatch(group, count):
     """Splitting the all-pairs sums over operator and site ranges changes only rounding."""
     g = zo.haar(group, count=count, seed=5)

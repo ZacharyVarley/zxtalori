@@ -8,7 +8,7 @@ ROOT=Path(__file__).resolve().parents[1]
 
 def test_gao_grid_preserves_ids_and_orders_small_buckets():
     rng=np.random.default_rng(516)
-    points=rng.uniform(-1,1,(1300,4)).astype(np.float32)
+    points=rng.uniform(-1,1,(1000,4)).astype(np.float32)
     points[:90,:3]=[-.95,-.95,-.95]  # The dense-bucket sort guard is exercised.
     points[90:94,:3]=[[0.,0.,0.],[-0.,0.,0.],[0.,-0.,0.],[0.,0.,-0.]]
     n=len(points);dim=8;cells=dim**3

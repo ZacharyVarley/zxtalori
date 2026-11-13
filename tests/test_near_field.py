@@ -40,7 +40,7 @@ def near_reference(q, ops, delta):
     return energy/(n*order*(n-1)),4*math.degrees(math.asin(math.sqrt(nearest)/2))
 
 
-@pytest.mark.parametrize("group,count",[("O",1500),("D6",1200),("C2",800)])
+@pytest.mark.parametrize("group,count",[("O",1000),("D6",1000),("C2",800)])
 def test_near_sums_match_dense_reference(group, count):
     with zxtalori.haar(group,count=count,seed=11) as grid:
         grid.relax(20)
@@ -57,8 +57,8 @@ def test_near_sums_match_dense_reference(group, count):
 def test_near_relaxation_approaches_all_pairs():
     outcomes={}
     for delta in (0,20):
-        with zxtalori.haar("O",count=4000,seed=7) as grid:
-            grid.relax(400,neighbourhood=delta)
+        with zxtalori.haar("O",count=1000,seed=7) as grid:
+            grid.relax(200,neighbourhood=delta)
             grid.relax(0,neighbourhood=0);grid.measure()
             outcomes[delta]=grid.stats
     assert outcomes[20]["energy"]==pytest.approx(outcomes[0]["energy"],rel=1e-5)

@@ -47,6 +47,7 @@ def test_imported_grid_covering_and_regeneration_invalidates():
         grid.set(q,'O');assert grid.stats['covering_radius_deg'] is None
 
 
+@pytest.mark.large
 def test_covering_past_the_workgroup_limit():
     # The witness check runs one thread per orbit image: 12 million here, past 65,535 x 128.
     with zxtalori.generate("O", count=500_000) as grid:
@@ -55,7 +56,7 @@ def test_covering_past_the_workgroup_limit():
 
 
 def test_covering_result_is_kept_for_an_unchanged_sample():
-    with zxtalori.haar("O", 3000, 11) as grid:
+    with zxtalori.haar("O", 1000, 11) as grid:
         first = grid.covering()
         assert not first["covering_cached"] and first["covering_unresolved_caps"] == 0
         again = grid.covering()

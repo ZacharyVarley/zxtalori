@@ -84,8 +84,9 @@ def test_separation_floor_holds_through_kicks():
         grid.relax(100)
         start=grid.covering()['covering_radius_deg']
         floor=0.99*grid.measure()['separation_deg']
-        grid.optimize_covering(1000,min_separation_deg=floor)
-        assert grid.stats['covering_optimizer_kicks']>0
+        # A gain of 50% is never reached, so it kicks every 50 steps, five times.
+        grid.optimize_covering(300,min_separation_deg=floor,patience=50,plateau_gain=0.5)
+        assert grid.stats['covering_optimizer_kicks']>=4
         assert grid.stats['covering_radius_deg']<start
         assert grid.measure()['separation_deg']>=floor*(1-1e-5)
 

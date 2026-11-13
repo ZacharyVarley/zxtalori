@@ -9,6 +9,7 @@ import math
 import sys
 
 import numpy as np
+import pytest
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'python'))
@@ -46,8 +47,10 @@ def main():
     rng=np.random.default_rng(312)
     q=rng.normal(size=(29,4));q/=np.linalg.norm(q,axis=-1,keepdims=True)
     report={}
-    for group in zo.GROUPS:
-        with zo.from_quaternions(q,group) as grid:
+    # One engine for every group: creating an engine costs about half a second.
+    with zo.from_quaternions(q,'C2') as grid:
+        for group in zo.GROUPS:
+            grid.set(q,group)
             current=grid.quaternions
             actual=grid.measure()
             expected=expected_measures(current,grid.operations)
@@ -59,7 +62,8 @@ def main():
             for key in expected:
                 np.testing.assert_allclose(invariant[key],actual[key],rtol=4e-4,atol=4e-4,err_msg=f'{group} antipodes {key}')
             report[group]={'random_measures':True,'antipodal_invariance':True,'max_measure_absolute_error':float(max(abs(actual[k]-v) for k,v in expected.items()))}
-        with zo.generate(group,h=3,count=256,kind='transport' if group in ('T','O','I') else None) as grid:
+            # A generated sample (h=3, transport for T, O and I), on the same engine.
+            grid._check(grid._lib.zo_generate(grid._handle,zo.api._group_id(group),3,256,0,2 if group in ('T','O','I') else 0))
             initial=grid.measure()['quey_energy']
             grid.relax(steps=3)
             quick=grid.stats
@@ -114,6 +118,7 @@ def test_import_scale_invariance():
 if __name__=='__main__':main()
 
 
+@pytest.mark.large
 def test_spacing_matches_all_pairs():
     # The near-field nearest neighbours (above 20,000 orientations) and the all-pairs ones.
     with zo.haar("O", 60000, 3) as grid:

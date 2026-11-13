@@ -129,7 +129,7 @@ jobs:
           "$PY" -m pip install --quiet -r requirements-dev.lock
           lib=$(cd "$RUNNER_TEMP" && "$PY" -c "import pathlib, zxtalori.api as a; print(pathlib.Path(a.__file__).parent / '_lib' / 'libzxtalori.dylib')")
           mkdir -p zig-out/web && cp out/web/engine/zxtalori.wasm zig-out/web/
-          ZXTALORI_LIBRARY="$lib" ZXTALORI_WGPU="$(dirname "$lib")" "$PY" -m pytest -q tests
+          ZXTALORI_LIBRARY="$lib" ZXTALORI_WGPU="$(dirname "$lib")" "$PY" -m pytest -q --durations=15 tests
 
       - name: Web app in headless Chrome (WebGPU), recording the pipelines it compiles
         if: matrix.os == 'macos-15'

@@ -68,6 +68,7 @@ jobs:
           done
           node tests/check_plot_geometry.mjs
           node tests/check_covering_policy.mjs
+          node tests/check_stopping.mjs
 
       - name: Site
         run: node scripts/build_web.mjs
@@ -136,7 +137,7 @@ jobs:
         run: |
           lib=$(cd "$RUNNER_TEMP" && "$RUNNER_TEMP/venv/bin/python" -c "import pathlib, zxtalori.api as a; print(pathlib.Path(a.__file__).parent / '_lib' / 'libzxtalori.dylib')")
           mkdir -p zig-out/web && cp dist/web/engine/zxtalori.wasm zig-out/web/
-          ZXTALORI_LIBRARY="$lib" ZXTALORI_WGPU="$(dirname "$lib")" "$RUNNER_TEMP/venv/bin/python" -m pytest -q tests
+          ZXTALORI_LIBRARY="$lib" ZXTALORI_WGPU="$(dirname "$lib")" "$RUNNER_TEMP/venv/bin/python" -m pytest -q --durations=15 tests
 
       - name: Web app in headless Chrome (WebGPU)
         run: node tests/test_web.mjs --dir dist/web

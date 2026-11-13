@@ -66,7 +66,7 @@ def main():
         else:
             raise RuntimeError("Packaged launcher did not start")
         assert b'Full SO(3)' in html and b'id="fix-identity"' in html
-        for name in ("engine/zxtalori.js", "engine/zxtalori.wasm", "app.js", "style.css", "geometry.js", "covering-policy.js", "render.js"):
+        for name in ("engine/zxtalori.js", "engine/zxtalori.wasm", "app.js", "style.css", "geometry.js", "covering-policy.js", "render.js", "stopping.js"):
             started=time.perf_counter()
             with urllib.request.urlopen("http://127.0.0.1:4181/" + name, timeout=15) as response:
                 size=len(response.read())

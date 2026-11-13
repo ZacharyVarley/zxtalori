@@ -10,9 +10,11 @@
 //                                                  site's first-visit warm start (web/zxtalori.js)
 //
 // The startup sample (O, h=6) with its covering check, repulsion steps, covering optimization,
-// the point colors following the objective, a million-point grid drawn on the GPU (discs, then
-// its SO(3) images as a density, and a GPU pick), and a 25,000-point Haar sample relaxed with the
-// near field. Fails on any error the page logs.
+// the point colors following the objective, Auto, a grid drawn on the GPU (discs, then its SO(3)
+// images as a density, and a GPU pick), and a Haar sample relaxed with the near field. Samples
+// stay near 1,000 orientations and runs short, so the macOS runner is held only briefly; each
+// view and force is chosen directly rather than reached by size. When Auto ends each stage is
+// checked without the GPU (tests/check_stopping.mjs). Fails on any error the page logs.
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -225,25 +227,37 @@ try {
     $("generate-button").click();
     await idle();
     pick("objective", "auto");
-    const steps = +$("iterations").value;
+    const steps = 300;
+    $("iterations").value = String(steps);
+    // A gain of 99% is never reached, so covering kicks every 20 steps (and compiles the kick
+    // pipeline for the site's warm start).
+    $("kick-patience").value = "20"; $("kick-gain").value = "99";
+    const earlier = new Set(document.querySelectorAll("#log-list li"));
     $("relax-button").click();
     await idle();
-    const lines = log();
+    const lines = [...document.querySelectorAll("#log-list li")].filter((li) => !earlier.has(li)).map((li) => li.textContent);
+    $("kick-patience").value = "150"; $("kick-gain").value = "0.05";
     pick("objective", "repulsion");
     $("target-count").value = "1000";
-    return { steps, kept: num("separation"), relaxed: lines.filter((l) => l.includes("Measured")).at(-2) || "", line: lines.filter((l) => l.includes("Covering optimization")).pop() || "", errors: errors() };`);
-  const taken = +(/Covering optimization ([\d,]+) steps/.exec(auto.line)?.[1] || "0").replace(",", "");
-  check("Auto runs both stages and stops the covering stage at a plateau", taken > 0 && taken < auto.steps && !auto.errors.length, auto.line);
+    return { steps, kept: num("separation"), relaxed: lines.find((l) => l.includes("Relaxation")) || "", line: lines.find((l) => l.includes("Covering optimization")) || "", errors: errors() };`);
+  const taken = (line) => +(/([\d,]+) steps/.exec(line)?.[1] || "0").replace(/,/g, "");
+  const kicks = +(/ (\d+) kicks/.exec(auto.line)?.[1] || "0");
+  check("Auto runs repulsion, then covering with kicks, each within its steps", [auto.relaxed, auto.line].every((line) => taken(line) > 0 && taken(line) <= auto.steps) && kicks > 0 && !auto.errors.length,
+    `${auto.relaxed} | ${auto.line}`);
   const floor = +(/separation floor ([\d.]+)°/.exec(auto.line)?.[1] || "NaN");
   check("Auto keeps 99% of the separation repulsion reached", auto.kept >= floor * (1 - 1e-4), `${auto.kept}° against a floor of ${floor}°`);
 
-  const large = await evaluate(`${helpers}
-    $("target-count").value = "1000000";
+  // GPU discs, then the SO(3) images as a density, chosen directly (Auto reaches them only past
+  // 150,000 and 2,000,000 images), and a pick from the GPU view.
+  const gpu = await evaluate(`${helpers}
+    const render = (mode) => { $("render-mode").value = mode; $("render-mode").dispatchEvent(new Event("change")); };
     $("generate-button").click();
     await idle();
+    render("points");
+    await sleep(400);
     const points = $("display-count").textContent, key = $("color-name").textContent, spread = $("color-spread").textContent;
-    const manual = $("covering-mode").disabled && $("covering-mode").value === "manual" && /Check now/.test($("covering-mode").title);
     pick("view-domain", "so3");
+    render("density");
     await sleep(400);
     const density = $("display-count").textContent;
     const c = $("view"), r = c.getBoundingClientRect(), x = r.left + r.width / 2 + 12, y = r.top + r.height / 2 + 6;
@@ -252,24 +266,25 @@ try {
     await sleep(800);
     const selected = $("selection-index").textContent;
     pick("view-domain", "fz");
-    $("target-count").value = "1000";
-    return { points, density, key, spread, selected, manual, errors: errors() };`);
-  check("covering updates show Manual, locked, for a sample too large to check automatically", large.manual);
-  check("a million orientations draw as GPU points, colored by their spacing", /GPU points/.test(large.points) && large.key.startsWith("Nearest neighbour") && /CV/.test(large.spread), `${large.points} · ${large.key} ${large.spread}`);
-  check("their SO(3) images draw as a density", /density/.test(large.density), large.density);
-  check("a click selects an orientation from the GPU view", /^#\d+/.test(large.selected), large.selected);
+    render("auto");
+    return { points, density, key, spread, selected, errors: errors() };`);
+  check("orientations draw as GPU points, colored by their spacing", /GPU points/.test(gpu.points) && gpu.key.startsWith("Nearest neighbour") && /CV/.test(gpu.spread), `${gpu.points} · ${gpu.key} ${gpu.spread}`);
+  check("their SO(3) images draw as a density", /density/.test(gpu.density), gpu.density);
+  check("a click selects an orientation from the GPU view", /^#\d+/.test(gpu.selected), gpu.selected);
 
+  // Near-field forces, chosen directly (Auto uses them only past 20,000 orientations).
   const near = await evaluate(`${helpers}
     pick("count-mode", "random");
-    $("target-count").value = "25000";
+    $("target-count").value = "1000";
     $("generate-button").click();
     await idle();
     pick("objective", "repulsion");
-    pick("forces", "auto");
-    const before = num("energy");
+    pick("forces", "near");
     await run(10);
-    return { count: $("sample-badge").textContent.split(" ")[0], line: log().filter((l) => l.includes("Relaxation")).pop() || "", errors: errors() };`);
-  check("a 25,000-point Haar sample relaxes with the near field", near.count === "25,000" && /near field/.test(near.line), `${near.count}: ${near.line}`);
+    const line = log().filter((l) => l.includes("Relaxation")).pop() || "";
+    pick("forces", "auto");
+    return { count: $("sample-badge").textContent.split(" ")[0], line, errors: errors() };`);
+  check("a 1,000-point Haar sample relaxes with near-field forces", near.count === "1,000" && /near field/.test(near.line), `${near.count}: ${near.line}`);
   check("the page logged no failures", !near.errors.length, near.errors.join(" | "));
 
   if (savePipelines) {

@@ -49,7 +49,7 @@ def test_point_values_match_hull(group, count):
 
 
 def test_point_values_track_runs():
-    with zxtalori.haar("O",count=2000,seed=9) as grid:
+    with zxtalori.haar("O",count=1000,seed=9) as grid:
         assert grid.point_values("covering") is None
         grid.relax(10)
         assert grid.point_values("separation") is not None

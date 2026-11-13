@@ -20,3 +20,7 @@ backend-path = ["scripts"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["python"]
+# Tests stay near 1,000 orientations. The few that need far more (paths only reached at
+# size) are marked large and left out unless asked for: pytest -m large
+markers = ["large: needs far more than 1,000 orientations; run with pytest -m large"]
+addopts = "-m 'not large'"

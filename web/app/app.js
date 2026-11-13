@@ -1,6 +1,7 @@
 import {Zxtalori} from './engine/zxtalori.js';
 import {multiply,boundary,displayPoints,project} from './geometry.js';
 import {shouldCheckCovering} from './covering-policy.js';
+import {repulsionPlateau,coveringPlateau} from './stopping.js';
 import {GpuView} from './render.js';
 
 const $=id=>document.getElementById(id);
@@ -114,32 +115,26 @@ $('floor-from-current').onclick=()=>{const separation=value('separation_deg');if
 $('iterations').addEventListener('change',()=>{runLength[choice('objective')]=+$('iterations').value;});
 // Before a run only a held identity needs restoring; the toggle already placed the point.
 const holdIdentity=async()=>{const fixed=$('fix-identity').checked;updateSnapshot(await state.engine.identity({add:fixed,fixed}));};
-// Auto ends a covering stage at the engine's kicks. A kick only comes once a descent has plateaued, so a
-// sample just kicked is never judged: stop when this many kicks have passed since the best last improved.
-const COVER_QUIET_KICKS=4,COVER_GAIN=5e-4;
 // The Plateau kicks fields, as the engine takes them (fractions).
 function kickSettings(){const patience=+$('kick-patience').value,gain=+$('kick-gain').value/100,size=+$('kick-size').value/100,trust=+$('kick-trust').value/100;
   if(!(Number.isInteger(patience)&&patience>=1&&patience<=1000000))throw new Error('Choose a kick patience from 1 to 1,000,000 steps.');if(!(gain>=0&&gain<1))throw new Error('Choose a kick gain from 0 to 99%.');if(!(size>=0&&size<=1))throw new Error('Choose a kick size from 0 to 100% of the radius.');if(!(trust>0&&trust<=1))throw new Error('Choose a trust radius above 0 and up to 100% of the radius.');return [patience,gain,size,trust];}
 async function optimizeCovering({steps,floor,plateau=false}){const mode=+choice('free-set');if(!(floor>=0&&floor<180))throw new Error('Choose a minimum separation from 0 to 180 degrees, or leave it empty.');await state.engine.coverKicks(...kickSettings());await holdIdentity();progress(0);
-  let bestSeen=Infinity,kicksAtBest=0,settled=false;
+  const plateaued=plateau?coveringPlateau():()=>false;let settled=false;
   // As in relaxation: batches of about 300 ms of GPU wait time, the next one queued and
   // submitted before the finished one is drawn, so the GPU works while the page draws.
   let done=0,issued=0,batch=10,pending=null;
   const launch=count=>{issued+=count;const waited=state.engine.state.stats.waitMs;return state.engine.optimizeCovering(count,mode,false,floor).then(snapshot=>({snapshot,count,elapsed:state.engine.state.stats.waitMs-waited}));};
   pending=launch(Math.min(batch,steps));
   while(pending){const {snapshot,count,elapsed}=await pending;pending=null;done+=count;batch=Math.max(1,Math.min(500,Math.round(count*300/Math.max(1,elapsed))));
-    const best=snapshot.stats?.covering_optimizer_best_deg,kicks=snapshot.stats?.covering_optimizer_kicks||0;if(best<bestSeen*(1-COVER_GAIN)){bestSeen=best;kicksAtBest=kicks;}settled=plateau&&kicks-kicksAtBest>=COVER_QUIET_KICKS;
+    settled=plateaued(snapshot.stats?.covering_optimizer_best_deg,snapshot.stats?.covering_optimizer_kicks||0);
     if(issued<steps&&!state.stop&&!settled){pending=launch(Math.min(batch,steps-issued));await new Promise(resolve=>setTimeout(resolve));}
     updateSnapshot(snapshot);status(`Optimizing covering · ${countFmt.format(done)} of ${countFmt.format(steps)} steps`,`${GROUPS[state.group]} · best ${number(value('covering_optimizer_best_deg'),4)}°`);progress(done/steps);addHistory();await new Promise(resolve=>requestAnimationFrame(resolve));}
   const stopped=state.stop;updateSnapshot(await state.engine.optimizeCovering(0,mode,true,floor));addHistory();if(stopped)status('Optimization stopped','Best sample retained');log(stopped?'Covering optimization stopped':'Covering optimization',`${countFmt.format(value('covering_optimizer_steps')||0)} steps · best ${number(value('covering_optimizer_best_deg'),5)}° · excess ${number(value('covering_excess'),5)} · ${value('covering_optimizer_kicks')||0} kicks · ${countFmt.format(value('covering_optimizer_improved')||0)} of ${countFmt.format(value('covering_optimizer_jobs')||0)} jobs improved in the last step${floor?` · separation floor ${number(floor,3)}°`:''}`);await measureSample();}
 // Near-field forces (Quey's delta = 20) above this many orientations under Auto.
 const NEAR_FIELD_FROM=20000;
 const nearField=()=>choice('forces')==='near'||choice('forces')==='auto'&&state.q.length/4>NEAR_FIELD_FROM;
-// Auto ends repulsion when the lowest energy gains less than this per step, relative, over two
-// windows in a row: its Barzilai-Borwein steps spike now and then, and the energy recovers.
-const RELAX_WINDOW=100,RELAX_GAIN=1e-9;
 async function relaxRepulsion({iterations,plateau=false}){await state.engine.relaxNeighbourhood(nearField()?20:0);await holdIdentity();progress(0);
-  let lowest=Infinity,reference=Infinity,referenceStep=0,calm=0;
+  const plateaued=plateau?repulsionPlateau():()=>false;let calm=false;
   // Steps run in engine batches of about 100 ms of GPU time, one readback each. The next batch
   // is queued before this one is drawn, so the GPU computes while the page draws. Batches are
   // sized by the engine's GPU wait time: a call's wall time also counts the page's drawing.
@@ -147,9 +142,9 @@ async function relaxRepulsion({iterations,plateau=false}){await state.engine.rel
   const launch=count=>{issued+=count;const waited=state.engine.state.stats.waitMs;return state.engine.relax(count).then(snapshot=>({snapshot,count,elapsed:state.engine.state.stats.waitMs-waited}));};
   pending=launch(Math.min(batch,iterations));
   while(pending){const {snapshot,count,elapsed}=await pending;pending=null;relaxing+=elapsed;done+=count;state.stepMilliseconds=.8*state.stepMilliseconds+.2*elapsed/count;batch=Math.max(1,Math.min(100,Math.round(count*100/Math.max(1,elapsed))));
-    const energy=snapshot.stats?.measures_current===false?null:snapshot.stats?.quey_energy;if(plateau&&Number.isFinite(energy)){lowest=Math.min(lowest,energy);if(done-referenceStep>=RELAX_WINDOW){calm=(reference-lowest)/Math.abs(lowest)/(done-referenceStep)<RELAX_GAIN?calm+1:0;reference=lowest;referenceStep=done;}}
+    const energy=snapshot.stats?.measures_current===false?null:snapshot.stats?.quey_energy;calm=plateaued(done,energy);
     // The engine queue starts the call in a later task: yield once so it is submitted before drawing.
-    if(issued<iterations&&!state.stop&&calm<2){pending=launch(Math.min(batch,iterations-issued));await new Promise(resolve=>setTimeout(resolve));}
+    if(issued<iterations&&!state.stop&&!calm){pending=launch(Math.min(batch,iterations-issued));await new Promise(resolve=>setTimeout(resolve));}
     status(`Relaxing · ${countFmt.format(done)} of ${countFmt.format(iterations)}`,`${GROUPS[state.group]} · ${value('relax_neighbourhood')?'near-field':'all-pairs'} repulsion`);updateSnapshot(snapshot);progress(done/iterations);addHistory();await maybeCovering('step');await new Promise(resolve=>requestAnimationFrame(resolve));}
   if(state.stop)status('Relaxation stopped','Current sample retained');log(state.stop?'Relaxation stopped':'Relaxation',`${countFmt.format(done)} steps · ${value('relax_neighbourhood')?'near field':'all pairs'} · ${(relaxing/Math.max(1,done)).toFixed(2)} ms of GPU time per step · ${value('energy_neighbourhood')?'near-field ':''}energy ${number(value('quey_energy','energy'),7)}`);await measureSample();if(!state.stop&&!plateau)await maybeCovering('end');}
 $('relax-button').onclick=()=>{const objective=choice('objective');withBusy({repulsion:'Relaxing sample',covering:'Optimizing covering',auto:'Optimizing sample'}[objective],async()=>{const steps=+$('iterations').value;if(!Number.isSafeInteger(steps)||steps<1)throw new Error('Choose a whole number of steps.');

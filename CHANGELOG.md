@@ -44,6 +44,13 @@ Notable changes to zxtalori, newest first. Versions follow `__version__` in
 - Removed: plotting the original points, and the zone and image counts in the right panel.
 - Dark-theme dropdown lists are readable.
 
+### Tests
+- GPU tests stay near 1,000 orientations and short runs. Size-dependent paths are reached
+  through settings (pair budget, near-field forces, render mode), and the three tests that
+  need millions of orientations are marked `large`: `pytest -m large`.
+- When Auto ends repulsion and covering is checked without the GPU
+  (`tests/check_stopping.mjs`).
+
 ## 0.2.2 (2026-11-02)
 - The workbench sidebar has two tabs, Instantiate and Optimize, with explanations in hover text.
 - The Auto objective: repulsion, then covering, each stopped at a plateau, keeping 99% of the

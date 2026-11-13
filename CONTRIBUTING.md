@@ -36,6 +36,14 @@ NumPy formulas, and native measure tests check public API invariants and Quey
 descent. Full expanded orbits are permitted in small independent test oracles;
 production code must keep them implicit.
 
+GPU tests stay near 1,000 orientations and short runs, since CI holds a macOS
+runner for them. Reach a size-dependent path with a setting rather than a large
+sample where one exists (the pair budget, near-field forces, the render mode).
+Creating a grid costs about half a second, so a test that loops over grids
+generates again on one engine. The few tests that only make sense at size
+(10 million orientations, the dispatch workgroup limit, near-field spacing) are
+marked `large` and left out by default; `pytest -m large` runs them.
+
 - `test_gpu_predicates.py`, `test_gpu_delaunay.py`: WGSL filters, symbolic
   ties and integer exact signs against rational arithmetic.
 - `test_covering.py`: every group before/after relaxation against full
@@ -48,11 +56,12 @@ production code must keep them implicit.
 - `test_point_values.py`: per-point separation, local covering radius and
   Voronoi faces against Qhull and a k-d tree.
 - `node tests/check_covering_policy.mjs` checks the automatic covering schedule;
+  `node tests/check_stopping.mjs` checks when Auto ends repulsion and covering;
   `node tests/check_plot_geometry.mjs` checks polyhedron topology, homochoric
   edge curvature and display subsampling.
 - `node tests/test_web.mjs` drives the app in headless Chrome (WebGPU) through
-  generation, repulsion, covering optimization and a near-field run, failing on
-  any page error; `--dir dist/web` tests a built site. `tests/test_app.py`
+  generation, repulsion, covering optimization, Auto, the GPU views and a
+  near-field run, failing on any page error; `--dir dist/web` tests a built site. `tests/test_app.py`
   checks that the launcher serves every file of the app.
 
 Some tests also write validation receipts to `research/validation/`, which Git
